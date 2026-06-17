@@ -12,8 +12,8 @@ from utils import get_market_risk_free_rate
 from strategies import (
     PullbackDollarCostAverage,
     SingleTickerStrategy,
-    MomentumContributionStrategy,
-    DefensiveContributionStrategy,
+    BufferedMomentumContributionStrategy,
+    CoreSatelliteContributionStrategy,
 )
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
@@ -51,26 +51,27 @@ comparison_configs = [
         'QQQ',
         PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("Momentum Leader Contributions", MomentumContributionStrategy(
+    ("Buffered Momentum Contributions", BufferedMomentumContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
         lookback_days=126,
-        top_n=1,
-        fallback_ticker='QQQ'
+        trend_window=200,
+        pullback_window=10,
+        core_ticker='QQQ'
     )),
-    ("Top-2 Contribution Split", MomentumContributionStrategy(
+    ("QQQ Core with Rotating Satellite", CoreSatelliteContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
         lookback_days=126,
-        top_n=2,
-        fallback_ticker='QQQ'
+        core_ticker='QQQ',
+        satellite_tickers=['SPY', 'VUG']
     )),
-    ("QQQ with SPY Defensive Contributions", DefensiveContributionStrategy(
+    ("VUG Core with Rotating Satellite", CoreSatelliteContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        growth_ticker='QQQ',
-        defensive_ticker='SPY',
-        trend_window=200
+        lookback_days=126,
+        core_ticker='VUG',
+        satellite_tickers=['QQQ', 'SPY']
     ))
 ]
 

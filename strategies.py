@@ -418,3 +418,114 @@ class DefensiveContributionStrategy(Strategy):
         if current[self.defensive_ticker] >= trend[self.defensive_ticker]:
             return self.defensive_ticker
         return self.growth_ticker
+
+
+class BufferedMomentumContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 lookback_days: int = 126, trend_window: int = 200,
+                 pullback_window: int = 10, core_ticker: str = 'QQQ'):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.lookback_days = lookback_days
+        self.trend_window = trend_window
+        self.pullback_window = pullback_window
+        self.core_ticker = core_ticker
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        buffer_cash = 0.0
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+        first_price = closes.loc[closes.index[0], self.core_ticker]
+        trades.loc[closes.index[0], self.core_ticker] += self.initial_capital / first_price
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            buffer_cash += self.monthly_deposit * 0.4
+            leader = self._select_leader(closes, date)
+            if leader is None:
+                leader = self.core_ticker
+            self._buy(trades, closes, date, leader, self.monthly_deposit * 0.6)
+            opportunity = self._select_pullback_asset(closes, date)
+            if opportunity is not None and buffer_cash > 0.0:
+                self._buy(trades, closes, date, opportunity, buffer_cash)
+                buffer_cash = 0.0
+
+        return trades
+
+    def _select_leader(self, closes: pd.DataFrame, date: pd.Timestamp) -> Optional[str]:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        scores = history.pct_change(self.lookback_days).iloc[-1].dropna()
+        scores = scores[current[scores.index] >= trend[scores.index]]
+        if scores.empty:
+            return None
+        return scores.sort_values(ascending=False).index[0]
+
+    def _select_pullback_asset(self, closes: pd.DataFrame, date: pd.Timestamp) -> Optional[str]:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        short_mean = history.rolling(self.pullback_window, min_periods=1).mean().iloc[-1]
+        scores = history.pct_change(self.lookback_days).iloc[-1].dropna()
+        scores = scores[current[scores.index] >= trend[scores.index]]
+        if scores.empty:
+            return None
+        candidates = []
+        for ticker in scores.sort_values(ascending=False).head(2).index:
+            pullback = (short_mean[ticker] - current[ticker]) / short_mean[ticker]
+            if pullback >= 0.0:
+                candidates.append((pullback, ticker))
+        if not candidates:
+            return None
+        return max(candidates)[1]
+
+    def _buy(self, trades: pd.DataFrame, closes: pd.DataFrame, date: pd.Timestamp,
+             ticker: str, amount: float):
+        price = closes.loc[date, ticker]
+        if price > 0.0 and amount > 0.0:
+            trades.loc[date, ticker] += amount / price
+
+
+class CoreSatelliteContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 core_ticker: str = 'QQQ', satellite_tickers: Optional[list] = None,
+                 lookback_days: int = 126):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.core_ticker = core_ticker
+        self.satellite_tickers = satellite_tickers or ['SPY', 'VUG']
+        self.lookback_days = lookback_days
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+        core_price = closes.loc[closes.index[0], self.core_ticker]
+        trades.loc[closes.index[0], self.core_ticker] += (self.initial_capital * 0.75) / core_price
+        satellite = self.satellite_tickers[0]
+        satellite_price = closes.loc[closes.index[0], satellite]
+        trades.loc[closes.index[0], satellite] += (self.initial_capital * 0.25) / satellite_price
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            self._buy_monthly(trades, closes, date, self.core_ticker, self.monthly_deposit * 0.7)
+            satellite = self._select_satellite(closes, date)
+            self._buy_monthly(trades, closes, date, satellite, self.monthly_deposit * 0.3)
+
+        return trades
+
+    def _select_satellite(self, closes: pd.DataFrame, date: pd.Timestamp) -> str:
+        scores = closes.loc[:date, self.satellite_tickers].pct_change(self.lookback_days).iloc[-1].dropna()
+        if scores.empty:
+            return self.satellite_tickers[0]
+        return scores.sort_values(ascending=False).index[0]
+
+    def _buy_monthly(self, trades: pd.DataFrame, closes: pd.DataFrame, date: pd.Timestamp,
+                     ticker: str, amount: float):
+        price = closes.loc[date, ticker]
+        if price > 0.0:
+            trades.loc[date, ticker] += amount / price
