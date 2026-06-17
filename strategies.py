@@ -223,15 +223,15 @@ class MonthlyRotationStrategy(Strategy):
 
     def _buy_targets(self, trades: pd.DataFrame, date: pd.Timestamp, prices: pd.Series,
                      holdings: dict, targets: list, cash: float) -> float:
-        budget = cash * (1.0 - self.cash_buffer_pct)
-        allocation = budget / len(targets)
+        portfolio_value = cash + sum(holdings[ticker] * prices[ticker] for ticker in targets)
+        allocation = (portfolio_value * (1.0 - self.cash_buffer_pct)) / len(targets)
         for ticker in targets:
             price = prices[ticker]
             if price <= 0.0:
                 continue
             target_shares = allocation / price
-            shares_to_buy = max(0.0, target_shares - holdings[ticker])
-            trades.loc[date, ticker] += shares_to_buy
-            cash -= shares_to_buy * price
-            holdings[ticker] += shares_to_buy
+            shares_delta = target_shares - holdings[ticker]
+            trades.loc[date, ticker] += shares_delta
+            cash -= shares_delta * price
+            holdings[ticker] += shares_delta
         return cash
