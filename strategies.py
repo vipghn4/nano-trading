@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from typing import Optional
 from data_structures import Strategy
 
@@ -102,3 +103,39 @@ class ValueAveraging(Strategy):
             
             trade_signals.loc[date, ticker] = shares_to_purchase
             shares_owned[ticker] += shares_to_purchase
+
+
+class PullbackDollarCostAverage(Strategy):
+    def __init__(self, base_monthly_amount: float, extra_monthly_amount: float,
+                 pullback_window: int = 20, pullback_pct: float = 0.0):
+        if base_monthly_amount <= 0.0:
+            raise ValueError("base_monthly_amount must be positive")
+        if extra_monthly_amount < 0.0:
+            raise ValueError("extra_monthly_amount must be non-negative")
+        if pullback_window < 1:
+            raise ValueError("pullback_window must be at least 1")
+        if pullback_pct < 0.0:
+            raise ValueError("pullback_pct must be non-negative")
+
+        self.base_monthly_amount = base_monthly_amount
+        self.extra_monthly_amount = extra_monthly_amount
+        self.pullback_window = pullback_window
+        self.pullback_pct = pullback_pct
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        tickers = data.columns.get_level_values(0).unique()
+        trade_signals = pd.DataFrame(0.0, index=data.index, columns=tickers)
+        is_first_day_of_month = data.index.to_series().dt.to_period('M') != \
+                                data.index.to_series().shift(1).dt.to_period('M')
+
+        for ticker in tickers:
+            prices = data[ticker]['Close']
+            rolling_mean = prices.rolling(window=self.pullback_window, min_periods=1).mean()
+            monthly_amount = pd.Series(self.base_monthly_amount, index=data.index)
+            pullback_trigger = prices <= (rolling_mean * (1.0 - self.pullback_pct))
+            monthly_amount = monthly_amount + (pullback_trigger.astype(float) * self.extra_monthly_amount)
+            valid_prices = prices.where(prices > 0.0, np.nan)
+            shares = (monthly_amount / valid_prices).where(is_first_day_of_month, 0.0)
+            trade_signals[ticker] = shares.fillna(0.0)
+
+        return trade_signals
