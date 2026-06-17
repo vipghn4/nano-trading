@@ -235,3 +235,109 @@ class MonthlyRotationStrategy(Strategy):
             cash -= shares_delta * price
             holdings[ticker] += shares_delta
         return cash
+
+
+class RegimeSwitchStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 growth_tickers: list, defensive_ticker: str,
+                 lookback_days: int = 126, trend_window: int = 200,
+                 cash_buffer_pct: float = 0.02):
+        if not growth_tickers or not defensive_ticker:
+            raise ValueError("growth_tickers and defensive_ticker are required")
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.growth_tickers = growth_tickers
+        self.defensive_ticker = defensive_ticker
+        self.lookback_days = lookback_days
+        self.trend_window = trend_window
+        self.cash_buffer_pct = cash_buffer_pct
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        holdings = {ticker: 0.0 for ticker in closes.columns}
+        cash = self.initial_capital
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            cash += self.monthly_deposit
+            target = self._select_target(closes, date)
+            prices = closes.loc[date]
+            for ticker, shares in holdings.items():
+                if shares > 0.0 and ticker != target:
+                    trades.loc[date, ticker] -= shares
+                    cash += shares * prices[ticker]
+                    holdings[ticker] = 0.0
+            if target is None or prices[target] <= 0.0:
+                continue
+            investable_cash = cash * (1.0 - self.cash_buffer_pct)
+            shares_to_buy = investable_cash / prices[target]
+            trades.loc[date, target] += shares_to_buy
+            holdings[target] += shares_to_buy
+            cash -= shares_to_buy * prices[target]
+
+        return trades
+
+    def _select_target(self, closes: pd.DataFrame, date: pd.Timestamp) -> Optional[str]:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        growth_returns = history[self.growth_tickers].pct_change(self.lookback_days).iloc[-1].dropna()
+        growth_returns = growth_returns[current[growth_returns.index] >= trend[growth_returns.index]]
+        if not growth_returns.empty:
+            return growth_returns.sort_values(ascending=False).index[0]
+        if current[self.defensive_ticker] >= trend[self.defensive_ticker]:
+            return self.defensive_ticker
+        return None
+
+
+class SelectiveContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 lookback_days: int = 126, trend_window: int = 200,
+                 pullback_window: int = 10):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.lookback_days = lookback_days
+        self.trend_window = trend_window
+        self.pullback_window = pullback_window
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            ticker = self._select_ticker(closes, date)
+            if ticker is None:
+                continue
+            price = closes.loc[date, ticker]
+            if price <= 0.0:
+                continue
+            deposit = self.monthly_deposit
+            if self._is_pullback(closes[ticker].loc[:date]):
+                deposit += self.monthly_deposit * 0.25
+            trades.loc[date, ticker] = deposit / price
+
+        first_date = closes.index[0]
+        first_ticker = self._select_ticker(closes, first_date) or closes.columns[0]
+        first_price = closes.loc[first_date, first_ticker]
+        trades.loc[first_date, first_ticker] += self.initial_capital / first_price
+        return trades
+
+    def _select_ticker(self, closes: pd.DataFrame, date: pd.Timestamp) -> Optional[str]:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        scores = history.pct_change(self.lookback_days).iloc[-1].dropna()
+        scores = scores[current[scores.index] >= trend[scores.index]]
+        if scores.empty:
+            return None
+        return scores.sort_values(ascending=False).index[0]
+
+    def _is_pullback(self, history: pd.Series) -> bool:
+        rolling_mean = history.rolling(self.pullback_window, min_periods=1).mean().iloc[-1]
+        return history.iloc[-1] <= rolling_mean

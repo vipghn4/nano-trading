@@ -9,7 +9,12 @@ if os.path.exists(_venv_python) and not sys.executable.startswith(os.path.join(_
 
 from yfinance_data_provider import YFinanceDataProvider
 from utils import get_market_risk_free_rate
-from strategies import PullbackDollarCostAverage, SingleTickerStrategy, MonthlyRotationStrategy
+from strategies import (
+    PullbackDollarCostAverage,
+    SingleTickerStrategy,
+    RegimeSwitchStrategy,
+    SelectiveContributionStrategy,
+)
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
 
@@ -46,32 +51,30 @@ comparison_configs = [
         'QQQ',
         PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("Monthly Leader Rotation", MonthlyRotationStrategy(
+    ("Growth Regime Switch", RegimeSwitchStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
+        growth_tickers=['QQQ', 'VUG'],
+        defensive_ticker='SPY',
         lookback_days=126,
         trend_window=200,
-        cash_buffer_pct=0.02,
-        top_n=1,
-        mode='momentum'
+        cash_buffer_pct=0.02
     )),
-    ("Top-2 Momentum Split", MonthlyRotationStrategy(
+    ("Selective Leader Contributions", SelectiveContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
         lookback_days=126,
         trend_window=200,
-        cash_buffer_pct=0.02,
-        top_n=2,
-        mode='momentum'
+        pullback_window=10
     )),
-    ("Monthly Contrarian Rotation", MonthlyRotationStrategy(
+    ("VUG/SPY Regime Switch", RegimeSwitchStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
+        growth_tickers=['VUG', 'QQQ'],
+        defensive_ticker='SPY',
         lookback_days=126,
         trend_window=200,
-        cash_buffer_pct=0.02,
-        top_n=1,
-        mode='contrarian'
+        cash_buffer_pct=0.02
     ))
 ]
 
