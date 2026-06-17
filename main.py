@@ -19,23 +19,28 @@ tickers = ['QQQ', 'SPY', 'VUG']
 market_data = data_provider.get_data(tickers)
 rf_rate = get_market_risk_free_rate()
 
-# 2. Shared Backtester Configuration (UK Trader trading US Stocks: GIA with 0.35% FX fee & 20% CGT)
-# Base Currency: GBP. Account Currency: USD.
+# 2. Shared Backtester Configuration (UK Trader trading UK Stocks via IBKR UK margin account)
 common_params = {
     'data': market_data,
-    'initial_capital': 5000.0 * 1.25,   # £5,000 converted to USD at GBP/USD = 1.25
+    'initial_capital': 5000.0,          # £5,000 starting balance in a GBP account
     'monthly_deposit': 1500.0,          # £1,500 monthly savings deposit
-    'deposit_fx_rate': 1.25,            # GBP/USD exchange rate for converting savings
-    'fx_pct': 0.0035,                   # 0.35% FX conversion markup fee charged by UK broker
-    'commission_pct': 0.0,              # Zero commission broker (like Freetrade/T212)
-    'tax_rate': 0.20,                   # 20% UK Capital Gains Tax (Higher-rate band)
-    'tax_deferred': True,               # Taxes settled annually at tax year-end
-    'allow_margin': False,              # Cash account (no leverage/borrowing)
+    'deposit_fx_rate': 1.0,             # No deposit FX conversion for GBP deposits into a GBP account
+    'account_currency': 'GBP',          # IBKR UK account funded and tracked in GBP
+    'deposit_currency': 'GBP',          # Monthly deposits are made in GBP
+    'fx_pct': 0.0,                      # No FX fee when a GBP account buys GBP-denominated UK stocks
+    'commission_pct': 0.0005,           # IBKR Fixed pricing for UK stocks: 0.05% of trade value
+    'commission_min': 3.0,              # IBKR Fixed pricing minimum: GBP 3.00 per stock order
+    'tax_rate': 0.24,                   # UK Capital Gains Tax higher/additional rate band
+    'tax_deferred': True,               # Approximate annual tax settlement rather than per-trade withholding
+    'allow_margin': True,               # IBKR margin account allows borrowing against portfolio equity
+    'annual_margin_rate': 0.05237,      # IBKR GBP margin loan rate for the first tier (0 to GBP 80,000)
+    'max_leverage': 2.0,                # Approximate 50% end-of-day stock margin => 2.0x gross leverage cap
+    'maintenance_margin_pct': 0.25,     # IBKR UK stock maintenance margin: 25% of stock value
     'allow_short': False,               # Short selling disabled
-    'allow_fractional': True,           # Fractional shares enabled
+    'allow_fractional': True,           # IBKR supports fractional trading in eligible European shares/ETFs
     'slippage_pct': 0.0005,             # 0.05% bid-ask execution spread
     'execution_delay': 1,               # 1-day execution delay
-    'execution_price_type': 'Open'      # Execute at next US market open
+    'execution_price_type': 'Open'      # Execute at next market open
 }
 
 # 3. Define Strategies to compare
