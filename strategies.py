@@ -635,3 +635,51 @@ class EventDrivenGrowthRotationStrategy(Strategy):
         if current[self.defensive_ticker] >= trend[self.defensive_ticker]:
             return self.defensive_ticker
         return None
+
+
+class RelativePullbackContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 long_window: int = 126, short_window: int = 21,
+                 trend_window: int = 200, top_n: int = 1,
+                 fallback_ticker: str = 'QQQ'):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.long_window = long_window
+        self.short_window = short_window
+        self.trend_window = trend_window
+        self.top_n = top_n
+        self.fallback_ticker = fallback_ticker
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+        initial_price = closes.loc[closes.index[0], self.fallback_ticker]
+        trades.loc[closes.index[0], self.fallback_ticker] += self.initial_capital / initial_price
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            targets = self._select_targets(closes, date)
+            if not targets:
+                targets = [self.fallback_ticker]
+            allocation = self.monthly_deposit / len(targets)
+            for ticker in targets:
+                price = closes.loc[date, ticker]
+                if price > 0.0:
+                    trades.loc[date, ticker] += allocation / price
+
+        return trades
+
+    def _select_targets(self, closes: pd.DataFrame, date: pd.Timestamp) -> list:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        long_return = history.pct_change(self.long_window).iloc[-1].dropna()
+        short_return = history.pct_change(self.short_window).iloc[-1].dropna()
+        aligned = long_return.index.intersection(short_return.index)
+        scores = (long_return[aligned] - short_return[aligned])
+        scores = scores[current[scores.index] >= trend[scores.index]]
+        if scores.empty:
+            return []
+        return scores.sort_values(ascending=False).head(self.top_n).index.tolist()

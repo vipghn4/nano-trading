@@ -12,8 +12,7 @@ from utils import get_market_risk_free_rate
 from strategies import (
     PullbackDollarCostAverage,
     SingleTickerStrategy,
-    EventDrivenSwitchStrategy,
-    EventDrivenGrowthRotationStrategy,
+    RelativePullbackContributionStrategy,
 )
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
@@ -51,29 +50,32 @@ comparison_configs = [
         'QQQ',
         PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("QQQ/SPY Event Switch", EventDrivenSwitchStrategy(
+    ("Relative Pullback Leader", RelativePullbackContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        growth_ticker='QQQ',
-        defensive_ticker='SPY',
+        long_window=126,
+        short_window=21,
         trend_window=200,
-        relative_window=63
+        top_n=1,
+        fallback_ticker='QQQ'
     )),
-    ("QQQ/VUG Growth Rotation", EventDrivenGrowthRotationStrategy(
+    ("Relative Pullback Top-2", RelativePullbackContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        growth_tickers=['QQQ', 'VUG'],
-        defensive_ticker='SPY',
+        long_window=126,
+        short_window=21,
         trend_window=200,
-        relative_window=63
+        top_n=2,
+        fallback_ticker='QQQ'
     )),
-    ("VUG/SPY Event Switch", EventDrivenSwitchStrategy(
+    ("Fast Pullback Leader", RelativePullbackContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        growth_ticker='VUG',
-        defensive_ticker='SPY',
+        long_window=63,
+        short_window=10,
         trend_window=200,
-        relative_window=63
+        top_n=1,
+        fallback_ticker='QQQ'
     ))
 ]
 
