@@ -12,8 +12,8 @@ from utils import get_market_risk_free_rate
 from strategies import (
     PullbackDollarCostAverage,
     SingleTickerStrategy,
-    BufferedMomentumContributionStrategy,
-    CoreSatelliteContributionStrategy,
+    EventDrivenSwitchStrategy,
+    EventDrivenGrowthRotationStrategy,
 )
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
@@ -51,27 +51,29 @@ comparison_configs = [
         'QQQ',
         PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("Buffered Momentum Contributions", BufferedMomentumContributionStrategy(
+    ("QQQ/SPY Event Switch", EventDrivenSwitchStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        lookback_days=126,
+        growth_ticker='QQQ',
+        defensive_ticker='SPY',
         trend_window=200,
-        pullback_window=10,
-        core_ticker='QQQ'
+        relative_window=63
     )),
-    ("QQQ Core with Rotating Satellite", CoreSatelliteContributionStrategy(
+    ("QQQ/VUG Growth Rotation", EventDrivenGrowthRotationStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        lookback_days=126,
-        core_ticker='QQQ',
-        satellite_tickers=['SPY', 'VUG']
+        growth_tickers=['QQQ', 'VUG'],
+        defensive_ticker='SPY',
+        trend_window=200,
+        relative_window=63
     )),
-    ("VUG Core with Rotating Satellite", CoreSatelliteContributionStrategy(
+    ("VUG/SPY Event Switch", EventDrivenSwitchStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        lookback_days=126,
-        core_ticker='VUG',
-        satellite_tickers=['QQQ', 'SPY']
+        growth_ticker='VUG',
+        defensive_ticker='SPY',
+        trend_window=200,
+        relative_window=63
     ))
 ]
 

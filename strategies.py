@@ -529,3 +529,109 @@ class CoreSatelliteContributionStrategy(Strategy):
         price = closes.loc[date, ticker]
         if price > 0.0:
             trades.loc[date, ticker] += amount / price
+
+
+class EventDrivenSwitchStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 growth_ticker: str = 'QQQ', defensive_ticker: str = 'SPY',
+                 trend_window: int = 200, relative_window: int = 63):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.growth_ticker = growth_ticker
+        self.defensive_ticker = defensive_ticker
+        self.trend_window = trend_window
+        self.relative_window = relative_window
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        holdings = {ticker: 0.0 for ticker in closes.columns}
+        cash = self.initial_capital
+        current_target = None
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+
+        for date in closes.index:
+            if month_start.loc[date]:
+                cash += self.monthly_deposit
+            target = self._select_target(closes, date)
+            prices = closes.loc[date]
+            if target != current_target:
+                for ticker, shares in holdings.items():
+                    if shares > 0.0:
+                        trades.loc[date, ticker] -= shares
+                        cash += shares * prices[ticker]
+                        holdings[ticker] = 0.0
+                current_target = target
+            if current_target is not None and cash > 0.0 and prices[current_target] > 0.0:
+                shares_to_buy = cash / prices[current_target]
+                trades.loc[date, current_target] += shares_to_buy
+                holdings[current_target] += shares_to_buy
+                cash = 0.0
+
+        return trades
+
+    def _select_target(self, closes: pd.DataFrame, date: pd.Timestamp) -> Optional[str]:
+        history = closes.loc[:date, [self.growth_ticker, self.defensive_ticker]]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        relative = history.pct_change(self.relative_window).iloc[-1].dropna()
+        if current[self.growth_ticker] >= trend[self.growth_ticker]:
+            if current[self.defensive_ticker] < trend[self.defensive_ticker]:
+                return self.growth_ticker
+            if relative.get(self.growth_ticker, 0.0) >= relative.get(self.defensive_ticker, 0.0):
+                return self.growth_ticker
+        if current[self.defensive_ticker] >= trend[self.defensive_ticker]:
+            return self.defensive_ticker
+        return None
+
+
+class EventDrivenGrowthRotationStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 growth_tickers: list, defensive_ticker: str = 'SPY',
+                 trend_window: int = 200, relative_window: int = 63):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.growth_tickers = growth_tickers
+        self.defensive_ticker = defensive_ticker
+        self.trend_window = trend_window
+        self.relative_window = relative_window
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        holdings = {ticker: 0.0 for ticker in closes.columns}
+        cash = self.initial_capital
+        current_target = None
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+
+        for date in closes.index:
+            if month_start.loc[date]:
+                cash += self.monthly_deposit
+            target = self._select_target(closes, date)
+            prices = closes.loc[date]
+            if target != current_target:
+                for ticker, shares in holdings.items():
+                    if shares > 0.0:
+                        trades.loc[date, ticker] -= shares
+                        cash += shares * prices[ticker]
+                        holdings[ticker] = 0.0
+                current_target = target
+            if current_target is not None and cash > 0.0 and prices[current_target] > 0.0:
+                shares_to_buy = cash / prices[current_target]
+                trades.loc[date, current_target] += shares_to_buy
+                holdings[current_target] += shares_to_buy
+                cash = 0.0
+
+        return trades
+
+    def _select_target(self, closes: pd.DataFrame, date: pd.Timestamp) -> Optional[str]:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        growth = history[self.growth_tickers].pct_change(self.relative_window).iloc[-1].dropna()
+        growth = growth[current[growth.index] >= trend[growth.index]]
+        if not growth.empty:
+            return growth.sort_values(ascending=False).index[0]
+        if current[self.defensive_ticker] >= trend[self.defensive_ticker]:
+            return self.defensive_ticker
+        return None
