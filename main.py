@@ -39,28 +39,28 @@ common_params = {
 
 # 3. Define Strategies to compare
 comparison_configs = [
-    ("Pullback DCA (1250 + 625, 20d mean)", PullbackDollarCostAverage(
-        base_monthly_amount=1250.0,
-        extra_monthly_amount=625.0,
-        pullback_window=20,
-        pullback_pct=0.0
-    )),
-    ("Pullback DCA (1375 + 500, 20d mean)", PullbackDollarCostAverage(
-        base_monthly_amount=1375.0,
-        extra_monthly_amount=500.0,
-        pullback_window=20,
-        pullback_pct=0.0
-    )),
-    ("Pullback DCA (1500 + 375, 20d mean)", PullbackDollarCostAverage(
-        base_monthly_amount=1500.0,
-        extra_monthly_amount=375.0,
-        pullback_window=20,
-        pullback_pct=0.0
-    )),
     ("Pullback DCA (1250 + 625, 10d mean)", PullbackDollarCostAverage(
         base_monthly_amount=1250.0,
         extra_monthly_amount=625.0,
         pullback_window=10,
+        pullback_pct=0.0
+    )),
+    ("Pullback DCA (1250 + 625, 5d mean)", PullbackDollarCostAverage(
+        base_monthly_amount=1250.0,
+        extra_monthly_amount=625.0,
+        pullback_window=5,
+        pullback_pct=0.0
+    )),
+    ("Pullback DCA (1250 + 625, 7d mean)", PullbackDollarCostAverage(
+        base_monthly_amount=1250.0,
+        extra_monthly_amount=625.0,
+        pullback_window=7,
+        pullback_pct=0.0
+    )),
+    ("Pullback DCA (1250 + 625, 15d mean)", PullbackDollarCostAverage(
+        base_monthly_amount=1250.0,
+        extra_monthly_amount=625.0,
+        pullback_window=15,
         pullback_pct=0.0
     ))
 ]
