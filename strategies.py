@@ -845,3 +845,58 @@ class TrendMeanReversionContributionStrategy(Strategy):
             return self.fallback_ticker
         eligible = scores[valid.index]
         return eligible.sort_values(ascending=True).index[0]
+
+
+class QQQPriorityContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 alternative_tickers: list, long_window: int = 126,
+                 trend_window: int = 200, pullback_window: int = 10,
+                 require_alt_pullback: bool = True):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.alternative_tickers = alternative_tickers
+        self.long_window = long_window
+        self.trend_window = trend_window
+        self.pullback_window = pullback_window
+        self.require_alt_pullback = require_alt_pullback
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+        first_price = closes.loc[closes.index[0], 'QQQ']
+        trades.loc[closes.index[0], 'QQQ'] += self.initial_capital / first_price
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            ticker = self._select_ticker(closes, date)
+            price = closes.loc[date, ticker]
+            if price > 0.0:
+                trades.loc[date, ticker] += self.monthly_deposit / price
+
+        return trades
+
+    def _select_ticker(self, closes: pd.DataFrame, date: pd.Timestamp) -> str:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        short_mean = history.rolling(self.pullback_window, min_periods=1).mean().iloc[-1]
+        long_return = history.pct_change(self.long_window).iloc[-1].dropna()
+
+        if current['QQQ'] <= short_mean['QQQ']:
+            return 'QQQ'
+
+        qqq_score = long_return.get('QQQ', float('-inf'))
+        best_ticker = 'QQQ'
+        best_score = qqq_score
+        for ticker in self.alternative_tickers:
+            if current[ticker] < trend[ticker]:
+                continue
+            if self.require_alt_pullback and current[ticker] > short_mean[ticker]:
+                continue
+            score = long_return.get(ticker, float('-inf'))
+            if score > best_score:
+                best_ticker = ticker
+                best_score = score
+        return best_ticker

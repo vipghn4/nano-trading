@@ -12,8 +12,7 @@ from utils import get_market_risk_free_rate
 from strategies import (
     PullbackDollarCostAverage,
     SingleTickerStrategy,
-    RiskAdjustedContributionStrategy,
-    TrendMeanReversionContributionStrategy,
+    QQQPriorityContributionStrategy,
 )
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
@@ -51,31 +50,32 @@ comparison_configs = [
         'QQQ',
         PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("Risk-Adjusted Leader Contributions", RiskAdjustedContributionStrategy(
+    ("QQQ Priority with Pullback Alternatives", QQQPriorityContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        momentum_window=126,
-        volatility_window=63,
-        trend_window=200,
-        top_n=1,
-        fallback_ticker='QQQ'
-    )),
-    ("Risk-Adjusted Split Contributions", RiskAdjustedContributionStrategy(
-        initial_capital=initial_capital,
-        monthly_deposit=monthly_deposit * 1.25,
-        momentum_window=126,
-        volatility_window=63,
-        trend_window=200,
-        top_n=2,
-        fallback_ticker='QQQ'
-    )),
-    ("Trend Mean-Reversion Contributions", TrendMeanReversionContributionStrategy(
-        initial_capital=initial_capital,
-        monthly_deposit=monthly_deposit * 1.25,
+        alternative_tickers=['VUG', 'SPY'],
         long_window=126,
-        short_window=21,
         trend_window=200,
-        fallback_ticker='QQQ'
+        pullback_window=10,
+        require_alt_pullback=True
+    )),
+    ("QQQ Priority with Momentum Alternatives", QQQPriorityContributionStrategy(
+        initial_capital=initial_capital,
+        monthly_deposit=monthly_deposit * 1.25,
+        alternative_tickers=['VUG', 'SPY'],
+        long_window=126,
+        trend_window=200,
+        pullback_window=10,
+        require_alt_pullback=False
+    )),
+    ("QQQ Priority with VUG Alternative Only", QQQPriorityContributionStrategy(
+        initial_capital=initial_capital,
+        monthly_deposit=monthly_deposit * 1.25,
+        alternative_tickers=['VUG'],
+        long_window=126,
+        trend_window=200,
+        pullback_window=10,
+        require_alt_pullback=True
     ))
 ]
 
