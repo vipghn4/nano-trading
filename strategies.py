@@ -754,3 +754,94 @@ class DynamicPullbackContributionStrategy(Strategy):
         price = closes.loc[date, ticker]
         if price > 0.0 and amount > 0.0:
             trades.loc[date, ticker] += amount / price
+
+
+class RiskAdjustedContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 momentum_window: int = 126, volatility_window: int = 63,
+                 trend_window: int = 200, top_n: int = 2, fallback_ticker: str = 'QQQ'):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.momentum_window = momentum_window
+        self.volatility_window = volatility_window
+        self.trend_window = trend_window
+        self.top_n = top_n
+        self.fallback_ticker = fallback_ticker
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+        first_price = closes.loc[closes.index[0], self.fallback_ticker]
+        trades.loc[closes.index[0], self.fallback_ticker] += self.initial_capital / first_price
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            weights = self._select_weights(closes, date)
+            if not weights:
+                weights = {self.fallback_ticker: 1.0}
+            for ticker, weight in weights.items():
+                price = closes.loc[date, ticker]
+                if price > 0.0:
+                    trades.loc[date, ticker] += (self.monthly_deposit * weight) / price
+
+        return trades
+
+    def _select_weights(self, closes: pd.DataFrame, date: pd.Timestamp) -> dict:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        momentum = history.pct_change(self.momentum_window).iloc[-1].dropna()
+        volatility = history.pct_change().rolling(self.volatility_window).std().iloc[-1].dropna()
+        aligned = momentum.index.intersection(volatility.index)
+        scores = (momentum[aligned] / volatility[aligned].replace(0.0, np.nan)).dropna()
+        scores = scores[current[scores.index] >= trend[scores.index]]
+        if scores.empty:
+            return {}
+        top = scores.sort_values(ascending=False).head(self.top_n)
+        total = top.sum()
+        return {ticker: score / total for ticker, score in top.items()}
+
+
+class TrendMeanReversionContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 long_window: int = 126, short_window: int = 21,
+                 trend_window: int = 200, fallback_ticker: str = 'QQQ'):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.long_window = long_window
+        self.short_window = short_window
+        self.trend_window = trend_window
+        self.fallback_ticker = fallback_ticker
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+        first_price = closes.loc[closes.index[0], self.fallback_ticker]
+        trades.loc[closes.index[0], self.fallback_ticker] += self.initial_capital / first_price
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            ticker = self._select_ticker(closes, date)
+            price = closes.loc[date, ticker]
+            if price > 0.0:
+                trades.loc[date, ticker] += self.monthly_deposit / price
+
+        return trades
+
+    def _select_ticker(self, closes: pd.DataFrame, date: pd.Timestamp) -> str:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        long_return = history.pct_change(self.long_window).iloc[-1].dropna()
+        short_return = history.pct_change(self.short_window).iloc[-1].dropna()
+        aligned = long_return.index.intersection(short_return.index)
+        scores = short_return[aligned]
+        valid = long_return[aligned][current[aligned] >= trend[aligned]]
+        if valid.empty:
+            return self.fallback_ticker
+        eligible = scores[valid.index]
+        return eligible.sort_values(ascending=True).index[0]

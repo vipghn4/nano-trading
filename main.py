@@ -12,7 +12,8 @@ from utils import get_market_risk_free_rate
 from strategies import (
     PullbackDollarCostAverage,
     SingleTickerStrategy,
-    DynamicPullbackContributionStrategy,
+    RiskAdjustedContributionStrategy,
+    TrendMeanReversionContributionStrategy,
 )
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
@@ -50,34 +51,30 @@ comparison_configs = [
         'QQQ',
         PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("Dynamic Pullback Leader", DynamicPullbackContributionStrategy(
+    ("Risk-Adjusted Leader Contributions", RiskAdjustedContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        base_fraction=0.7,
-        lookback_days=126,
-        pullback_window=10,
+        momentum_window=126,
+        volatility_window=63,
         trend_window=200,
         top_n=1,
         fallback_ticker='QQQ'
     )),
-    ("Dynamic Pullback Top-2", DynamicPullbackContributionStrategy(
+    ("Risk-Adjusted Split Contributions", RiskAdjustedContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        base_fraction=0.7,
-        lookback_days=126,
-        pullback_window=10,
+        momentum_window=126,
+        volatility_window=63,
         trend_window=200,
         top_n=2,
         fallback_ticker='QQQ'
     )),
-    ("QQQ-First Dynamic Pullback", DynamicPullbackContributionStrategy(
+    ("Trend Mean-Reversion Contributions", TrendMeanReversionContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        base_fraction=0.85,
-        lookback_days=126,
-        pullback_window=10,
+        long_window=126,
+        short_window=21,
         trend_window=200,
-        top_n=1,
         fallback_ticker='QQQ'
     ))
 ]
