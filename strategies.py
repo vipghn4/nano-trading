@@ -341,3 +341,80 @@ class SelectiveContributionStrategy(Strategy):
     def _is_pullback(self, history: pd.Series) -> bool:
         rolling_mean = history.rolling(self.pullback_window, min_periods=1).mean().iloc[-1]
         return history.iloc[-1] <= rolling_mean
+
+
+class MomentumContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 lookback_days: int = 126, top_n: int = 1,
+                 fallback_ticker: str = 'QQQ'):
+        if initial_capital <= 0.0 or monthly_deposit < 0.0 or lookback_days < 1 or top_n < 1:
+            raise ValueError("invalid momentum contribution inputs")
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.lookback_days = lookback_days
+        self.top_n = top_n
+        self.fallback_ticker = fallback_ticker
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+
+        initial_price = closes.loc[closes.index[0], self.fallback_ticker]
+        trades.loc[closes.index[0], self.fallback_ticker] += self.initial_capital / initial_price
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            targets = self._select_targets(closes, date)
+            if not targets:
+                targets = [self.fallback_ticker]
+            allocation = self.monthly_deposit / len(targets)
+            for ticker in targets:
+                price = closes.loc[date, ticker]
+                if price > 0.0:
+                    trades.loc[date, ticker] += allocation / price
+        return trades
+
+    def _select_targets(self, closes: pd.DataFrame, date: pd.Timestamp) -> list:
+        scores = closes.loc[:date].pct_change(self.lookback_days).iloc[-1].dropna()
+        if scores.empty:
+            return []
+        return scores.sort_values(ascending=False).head(self.top_n).index.tolist()
+
+
+class DefensiveContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 growth_ticker: str = 'QQQ', defensive_ticker: str = 'SPY',
+                 trend_window: int = 200):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.growth_ticker = growth_ticker
+        self.defensive_ticker = defensive_ticker
+        self.trend_window = trend_window
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+        first_price = closes.loc[closes.index[0], self.growth_ticker]
+        trades.loc[closes.index[0], self.growth_ticker] += self.initial_capital / first_price
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            target = self._select_target(closes, date)
+            price = closes.loc[date, target]
+            if price > 0.0:
+                trades.loc[date, target] += self.monthly_deposit / price
+        return trades
+
+    def _select_target(self, closes: pd.DataFrame, date: pd.Timestamp) -> str:
+        history = closes.loc[:date, [self.growth_ticker, self.defensive_ticker]]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        current = history.iloc[-1]
+        if current[self.growth_ticker] >= trend[self.growth_ticker]:
+            return self.growth_ticker
+        if current[self.defensive_ticker] >= trend[self.defensive_ticker]:
+            return self.defensive_ticker
+        return self.growth_ticker

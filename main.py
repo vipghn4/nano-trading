@@ -12,8 +12,8 @@ from utils import get_market_risk_free_rate
 from strategies import (
     PullbackDollarCostAverage,
     SingleTickerStrategy,
-    RegimeSwitchStrategy,
-    SelectiveContributionStrategy,
+    MomentumContributionStrategy,
+    DefensiveContributionStrategy,
 )
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
@@ -51,30 +51,26 @@ comparison_configs = [
         'QQQ',
         PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("Growth Regime Switch", RegimeSwitchStrategy(
+    ("Momentum Leader Contributions", MomentumContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        growth_tickers=['QQQ', 'VUG'],
-        defensive_ticker='SPY',
         lookback_days=126,
-        trend_window=200,
-        cash_buffer_pct=0.02
+        top_n=1,
+        fallback_ticker='QQQ'
     )),
-    ("Selective Leader Contributions", SelectiveContributionStrategy(
+    ("Top-2 Contribution Split", MomentumContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
         lookback_days=126,
-        trend_window=200,
-        pullback_window=10
+        top_n=2,
+        fallback_ticker='QQQ'
     )),
-    ("VUG/SPY Regime Switch", RegimeSwitchStrategy(
+    ("QQQ with SPY Defensive Contributions", DefensiveContributionStrategy(
         initial_capital=initial_capital,
         monthly_deposit=monthly_deposit * 1.25,
-        growth_tickers=['VUG', 'QQQ'],
+        growth_ticker='QQQ',
         defensive_ticker='SPY',
-        lookback_days=126,
-        trend_window=200,
-        cash_buffer_pct=0.02
+        trend_window=200
     ))
 ]
 
