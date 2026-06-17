@@ -9,7 +9,7 @@ if os.path.exists(_venv_python) and not sys.executable.startswith(os.path.join(_
 
 from yfinance_data_provider import YFinanceDataProvider
 from utils import get_market_risk_free_rate
-from strategies import ValueAveraging, PullbackDollarCostAverage
+from strategies import PullbackDollarCostAverage
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
 
@@ -39,24 +39,29 @@ common_params = {
 
 # 3. Define Strategies to compare
 comparison_configs = [
-    ("Value Averaging (2500)", ValueAveraging(monthly_target_increment=2500.0)),
     ("Pullback DCA (1250 + 625, 20d mean)", PullbackDollarCostAverage(
         base_monthly_amount=1250.0,
         extra_monthly_amount=625.0,
         pullback_window=20,
         pullback_pct=0.0
     )),
-    ("Pullback DCA (1000 + 875, 20d 3%)", PullbackDollarCostAverage(
-        base_monthly_amount=1000.0,
-        extra_monthly_amount=875.0,
+    ("Pullback DCA (1375 + 500, 20d mean)", PullbackDollarCostAverage(
+        base_monthly_amount=1375.0,
+        extra_monthly_amount=500.0,
         pullback_window=20,
-        pullback_pct=0.03
+        pullback_pct=0.0
     )),
-    ("Pullback DCA (750 + 1125, 50d 5%)", PullbackDollarCostAverage(
-        base_monthly_amount=750.0,
-        extra_monthly_amount=1125.0,
-        pullback_window=50,
-        pullback_pct=0.05
+    ("Pullback DCA (1500 + 375, 20d mean)", PullbackDollarCostAverage(
+        base_monthly_amount=1500.0,
+        extra_monthly_amount=375.0,
+        pullback_window=20,
+        pullback_pct=0.0
+    )),
+    ("Pullback DCA (1250 + 625, 10d mean)", PullbackDollarCostAverage(
+        base_monthly_amount=1250.0,
+        extra_monthly_amount=625.0,
+        pullback_window=10,
+        pullback_pct=0.0
     ))
 ]
 
