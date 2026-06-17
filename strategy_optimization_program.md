@@ -17,7 +17,9 @@ Work with the user to:
    - `main.py`
 4. Treat everything as fixed except:
    - `strategies.py` for new strategy logic
-   - `main.py` for wiring experiments, inputs, and comparisons
+   - `main.py` only for:
+     - changing `comparison_configs`
+     - adding temporary code for data inspection, printing metrics, and saving or printing intermediate outputs for inspection
 5. Initialize `results.tsv` with this header and leave it untracked:
 
 ```tsv
@@ -42,10 +44,10 @@ python main.py > run.log 2>&1
 - Inspect the data, printed metrics, and intermediate outputs before deciding what to try next.
 - Form hypotheses, test them, discard weak ones, and iterate toward stronger ideas.
 - Add, remove, or simplify strategies in `strategies.py`
-- Change the strategy list, ticker universe, dates, and backtest assumptions in `main.py`
+- Change `comparison_configs` in `main.py`
 - Tune parameters, sizing rules, and signal logic
 - Compare multiple candidate strategies in one run
-- Save intermediate results, extra diagnostics, and ad hoc statistics when they help you inspect behavior or validate a hypothesis
+- Add temporary inspection code in `main.py` to inspect data, print metrics, and save or print intermediate outputs when they help you inspect behavior or validate a hypothesis
 
 ### What you CANNOT do
 
@@ -55,6 +57,9 @@ python main.py > run.log 2>&1
   - `data_structures.py`
   - the data provider
 - Install new packages
+- Change `main.py` for anything other than:
+  - changing `comparison_configs`
+  - adding temporary inspection code for data inspection, printed metrics, or saved or printed intermediate outputs
 - Change the evaluation logic outside `main.py`
 
 ### Hard rules
