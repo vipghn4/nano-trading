@@ -139,3 +139,21 @@ class PullbackDollarCostAverage(Strategy):
             trade_signals[ticker] = shares.fillna(0.0)
 
         return trade_signals
+
+
+class SingleTickerStrategy(Strategy):
+    def __init__(self, ticker: str, inner_strategy: Strategy):
+        if not ticker:
+            raise ValueError("ticker is required")
+        self.ticker = ticker
+        self.inner_strategy = inner_strategy
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        trades = self.inner_strategy.generate_trades(data)
+        if self.ticker not in trades.columns:
+            raise ValueError(f"{self.ticker} not found in trade columns")
+        filtered = trades.copy()
+        for column in filtered.columns:
+            if column != self.ticker:
+                filtered[column] = 0.0
+        return filtered

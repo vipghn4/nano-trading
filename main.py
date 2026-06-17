@@ -9,19 +9,20 @@ if os.path.exists(_venv_python) and not sys.executable.startswith(os.path.join(_
 
 from yfinance_data_provider import YFinanceDataProvider
 from utils import get_market_risk_free_rate
-from strategies import PullbackDollarCostAverage
+from strategies import PullbackDollarCostAverage, SingleTickerStrategy
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
 
 # 1. Centralized Data Fetching
 data_provider = YFinanceDataProvider(start_date='2015-01-01')
-qqq_data = data_provider.get_data(['QQQ'])
+tickers = ['QQQ', 'SPY', 'VUG']
+market_data = data_provider.get_data(tickers)
 rf_rate = get_market_risk_free_rate()
 
 # 2. Shared Backtester Configuration (UK Trader trading US Stocks: GIA with 0.35% FX fee & 20% CGT)
 # Base Currency: GBP. Account Currency: USD.
 common_params = {
-    'data': qqq_data,
+    'data': market_data,
     'initial_capital': 5000.0 * 1.25,   # £5,000 converted to USD at GBP/USD = 1.25
     'monthly_deposit': 1500.0,          # £1,500 monthly savings deposit
     'deposit_fx_rate': 1.25,            # GBP/USD exchange rate for converting savings
@@ -39,29 +40,17 @@ common_params = {
 
 # 3. Define Strategies to compare
 comparison_configs = [
-    ("Pullback DCA (1250 + 625, 10d mean)", PullbackDollarCostAverage(
-        base_monthly_amount=1250.0,
-        extra_monthly_amount=625.0,
-        pullback_window=10,
-        pullback_pct=0.0
+    ("QQQ Pullback DCA", SingleTickerStrategy(
+        'QQQ',
+        PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("Pullback DCA (1250 + 625, 5d mean)", PullbackDollarCostAverage(
-        base_monthly_amount=1250.0,
-        extra_monthly_amount=625.0,
-        pullback_window=5,
-        pullback_pct=0.0
+    ("SPY Pullback DCA", SingleTickerStrategy(
+        'SPY',
+        PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("Pullback DCA (1250 + 625, 7d mean)", PullbackDollarCostAverage(
-        base_monthly_amount=1250.0,
-        extra_monthly_amount=625.0,
-        pullback_window=7,
-        pullback_pct=0.0
-    )),
-    ("Pullback DCA (1250 + 625, 15d mean)", PullbackDollarCostAverage(
-        base_monthly_amount=1250.0,
-        extra_monthly_amount=625.0,
-        pullback_window=15,
-        pullback_pct=0.0
+    ("VUG Pullback DCA", SingleTickerStrategy(
+        'VUG',
+        PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     ))
 ]
 
@@ -71,7 +60,7 @@ for name, strategy in comparison_configs:
     print(f"\n{'='*20} Running: {name} {'='*20}")
     tester = Backtester(strategy=strategy, **common_params)
     results = tester.run()
-    analyzer = PerformanceAnalyzer(results, tester, strategy, qqq_data, risk_free_rate=rf_rate)
+    analyzer = PerformanceAnalyzer(results, tester, strategy, market_data, risk_free_rate=rf_rate)
     
     # Calculate and display metrics
     analyzer._calculate_all_metrics()
