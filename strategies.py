@@ -157,3 +157,81 @@ class SingleTickerStrategy(Strategy):
             if column != self.ticker:
                 filtered[column] = 0.0
         return filtered
+
+
+class MonthlyRotationStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 lookback_days: int = 126, trend_window: int = 200,
+                 cash_buffer_pct: float = 0.02, top_n: int = 1,
+                 mode: str = 'momentum'):
+        if initial_capital <= 0.0:
+            raise ValueError("initial_capital must be positive")
+        if monthly_deposit < 0.0:
+            raise ValueError("monthly_deposit must be non-negative")
+        if lookback_days < 1 or trend_window < 1 or top_n < 1:
+            raise ValueError("lookback_days, trend_window, and top_n must be positive")
+        if mode not in {'momentum', 'contrarian'}:
+            raise ValueError("mode must be 'momentum' or 'contrarian'")
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.lookback_days = lookback_days
+        self.trend_window = trend_window
+        self.cash_buffer_pct = cash_buffer_pct
+        self.top_n = top_n
+        self.mode = mode
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        tickers = closes.columns.tolist()
+        trades = pd.DataFrame(0.0, index=closes.index, columns=tickers)
+        holdings = {ticker: 0.0 for ticker in tickers}
+        cash = self.initial_capital
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            cash += self.monthly_deposit
+            prices = closes.loc[date]
+            targets = self._select_targets(closes, date)
+            cash = self._sell_non_targets(trades, date, prices, holdings, targets, cash)
+            if not targets:
+                continue
+            cash = self._buy_targets(trades, date, prices, holdings, targets, cash)
+
+        return trades
+
+    def _select_targets(self, closes: pd.DataFrame, date: pd.Timestamp) -> list:
+        window = closes.loc[:date]
+        returns = window.pct_change(self.lookback_days).iloc[-1].dropna()
+        trend = window.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        eligible = returns[window.iloc[-1] >= trend]
+        if eligible.empty:
+            return []
+        ordered = eligible.sort_values(ascending=(self.mode == 'contrarian'))
+        return ordered.head(self.top_n).index.tolist()
+
+    def _sell_non_targets(self, trades: pd.DataFrame, date: pd.Timestamp, prices: pd.Series,
+                          holdings: dict, targets: list, cash: float) -> float:
+        for ticker, shares in holdings.items():
+            if shares <= 0.0 or ticker in targets:
+                continue
+            trades.loc[date, ticker] -= shares
+            cash += shares * prices[ticker]
+            holdings[ticker] = 0.0
+        return cash
+
+    def _buy_targets(self, trades: pd.DataFrame, date: pd.Timestamp, prices: pd.Series,
+                     holdings: dict, targets: list, cash: float) -> float:
+        budget = cash * (1.0 - self.cash_buffer_pct)
+        allocation = budget / len(targets)
+        for ticker in targets:
+            price = prices[ticker]
+            if price <= 0.0:
+                continue
+            target_shares = allocation / price
+            shares_to_buy = max(0.0, target_shares - holdings[ticker])
+            trades.loc[date, ticker] += shares_to_buy
+            cash -= shares_to_buy * price
+            holdings[ticker] += shares_to_buy
+        return cash

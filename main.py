@@ -9,7 +9,7 @@ if os.path.exists(_venv_python) and not sys.executable.startswith(os.path.join(_
 
 from yfinance_data_provider import YFinanceDataProvider
 from utils import get_market_risk_free_rate
-from strategies import PullbackDollarCostAverage, SingleTickerStrategy
+from strategies import PullbackDollarCostAverage, SingleTickerStrategy, MonthlyRotationStrategy
 from backtester import Backtester
 from performance_analyzer import PerformanceAnalyzer
 
@@ -18,13 +18,15 @@ data_provider = YFinanceDataProvider(start_date='2015-01-01')
 tickers = ['QQQ', 'SPY', 'VUG']
 market_data = data_provider.get_data(tickers)
 rf_rate = get_market_risk_free_rate()
+initial_capital = 5000.0 * 1.25
+monthly_deposit = 1500.0
 
 # 2. Shared Backtester Configuration (UK Trader trading US Stocks: GIA with 0.35% FX fee & 20% CGT)
 # Base Currency: GBP. Account Currency: USD.
 common_params = {
     'data': market_data,
-    'initial_capital': 5000.0 * 1.25,   # £5,000 converted to USD at GBP/USD = 1.25
-    'monthly_deposit': 1500.0,          # £1,500 monthly savings deposit
+    'initial_capital': initial_capital, # £5,000 converted to USD at GBP/USD = 1.25
+    'monthly_deposit': monthly_deposit, # £1,500 monthly savings deposit
     'deposit_fx_rate': 1.25,            # GBP/USD exchange rate for converting savings
     'fx_pct': 0.0035,                   # 0.35% FX conversion markup fee charged by UK broker
     'commission_pct': 0.0,              # Zero commission broker (like Freetrade/T212)
@@ -44,13 +46,32 @@ comparison_configs = [
         'QQQ',
         PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
     )),
-    ("SPY Pullback DCA", SingleTickerStrategy(
-        'SPY',
-        PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
+    ("Monthly Leader Rotation", MonthlyRotationStrategy(
+        initial_capital=initial_capital,
+        monthly_deposit=monthly_deposit * 1.25,
+        lookback_days=126,
+        trend_window=200,
+        cash_buffer_pct=0.02,
+        top_n=1,
+        mode='momentum'
     )),
-    ("VUG Pullback DCA", SingleTickerStrategy(
-        'VUG',
-        PullbackDollarCostAverage(base_monthly_amount=1250.0, extra_monthly_amount=625.0, pullback_window=10)
+    ("Top-2 Momentum Split", MonthlyRotationStrategy(
+        initial_capital=initial_capital,
+        monthly_deposit=monthly_deposit * 1.25,
+        lookback_days=126,
+        trend_window=200,
+        cash_buffer_pct=0.02,
+        top_n=2,
+        mode='momentum'
+    )),
+    ("Monthly Contrarian Rotation", MonthlyRotationStrategy(
+        initial_capital=initial_capital,
+        monthly_deposit=monthly_deposit * 1.25,
+        lookback_days=126,
+        trend_window=200,
+        cash_buffer_pct=0.02,
+        top_n=1,
+        mode='contrarian'
     ))
 ]
 
