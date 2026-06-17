@@ -39,9 +39,10 @@ common_params = {
 
 # 3. Define Strategies to compare
 comparison_configs = [
-    ("Dollar Cost Averaging", DollarCostAverage(monthly_share_quantity=10.0)),
-    ("Value Averaging", ValueAveraging(monthly_target_increment=2500.0)),
-    ("MA Crossover (50/200)", MovingAverageCrossover(short_window=50, long_window=200, trade_quantity=10.0))
+    ("Value Averaging (2500)", ValueAveraging(monthly_target_increment=2500.0)),
+    ("Value Averaging (3000)", ValueAveraging(monthly_target_increment=3000.0)),
+    ("Value Averaging (3500)", ValueAveraging(monthly_target_increment=3500.0)),
+    ("Value Averaging (4000)", ValueAveraging(monthly_target_increment=4000.0))
 ]
 
 # 4. Run and Analyze All Strategies
