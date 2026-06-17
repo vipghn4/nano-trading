@@ -683,3 +683,74 @@ class RelativePullbackContributionStrategy(Strategy):
         if scores.empty:
             return []
         return scores.sort_values(ascending=False).head(self.top_n).index.tolist()
+
+
+class DynamicPullbackContributionStrategy(Strategy):
+    def __init__(self, initial_capital: float, monthly_deposit: float,
+                 base_fraction: float = 0.7, lookback_days: int = 126,
+                 pullback_window: int = 10, trend_window: int = 200,
+                 top_n: int = 1, fallback_ticker: str = 'QQQ'):
+        self.initial_capital = initial_capital
+        self.monthly_deposit = monthly_deposit
+        self.base_fraction = base_fraction
+        self.lookback_days = lookback_days
+        self.pullback_window = pullback_window
+        self.trend_window = trend_window
+        self.top_n = top_n
+        self.fallback_ticker = fallback_ticker
+
+    def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
+        closes = data.xs('Close', level=1, axis=1)
+        trades = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+        buffer_cash = 0.0
+        month_start = closes.index.to_series().dt.to_period('M') != closes.index.to_series().shift(1).dt.to_period('M')
+        first_price = closes.loc[closes.index[0], self.fallback_ticker]
+        trades.loc[closes.index[0], self.fallback_ticker] += self.initial_capital / first_price
+
+        for date in closes.index:
+            if not month_start.loc[date]:
+                continue
+            targets = self._select_targets(closes, date)
+            if not targets:
+                targets = [self.fallback_ticker]
+            base_amount = (self.monthly_deposit * self.base_fraction) / len(targets)
+            for ticker in targets:
+                self._buy(trades, closes, date, ticker, base_amount)
+            buffer_cash += self.monthly_deposit * (1.0 - self.base_fraction)
+            opportunity = self._select_pullback_target(closes, date, targets)
+            if opportunity is not None and buffer_cash > 0.0:
+                self._buy(trades, closes, date, opportunity, buffer_cash)
+                buffer_cash = 0.0
+
+        return trades
+
+    def _select_targets(self, closes: pd.DataFrame, date: pd.Timestamp) -> list:
+        history = closes.loc[:date]
+        current = history.iloc[-1]
+        trend = history.rolling(self.trend_window, min_periods=1).mean().iloc[-1]
+        scores = history.pct_change(self.lookback_days).iloc[-1].dropna()
+        scores = scores[current[scores.index] >= trend[scores.index]]
+        if scores.empty:
+            return []
+        return scores.sort_values(ascending=False).head(self.top_n).index.tolist()
+
+    def _select_pullback_target(self, closes: pd.DataFrame, date: pd.Timestamp, targets: list) -> Optional[str]:
+        history = closes.loc[:date]
+        short_mean = history.rolling(self.pullback_window, min_periods=1).mean().iloc[-1]
+        current = history.iloc[-1]
+        candidates = []
+        for ticker in targets:
+            if short_mean[ticker] <= 0.0:
+                continue
+            pullback = (short_mean[ticker] - current[ticker]) / short_mean[ticker]
+            if pullback >= 0.0:
+                candidates.append((pullback, ticker))
+        if not candidates:
+            return None
+        return max(candidates)[1]
+
+    def _buy(self, trades: pd.DataFrame, closes: pd.DataFrame, date: pd.Timestamp,
+             ticker: str, amount: float):
+        price = closes.loc[date, ticker]
+        if price > 0.0 and amount > 0.0:
+            trades.loc[date, ticker] += amount / price
