@@ -132,12 +132,16 @@ class Backtester:
                          execution_delay: int, execution_price_type: str):
         if not isinstance(data.columns, pd.MultiIndex):
             raise ValueError("Data columns must be a MultiIndex DataFrame with levels (Ticker, Price)")
+        if execution_delay < 0:
+            raise ValueError("execution_delay cannot be negative")
         if max_leverage < 1.0:
             raise ValueError("max_leverage must be at least 1.0")
         if maintenance_margin_pct < 0.0 or maintenance_margin_pct >= 1.0:
             raise ValueError("maintenance_margin_pct must be between 0.0 and 1.0")
-        if execution_delay == 0 and execution_price_type == 'Open':
-            raise ValueError("execution_delay cannot be 0 when execution_price_type is 'Open' due to lookahead bias risk.")
+        if execution_delay == 0:
+            raise ValueError(
+                "execution_delay must be at least 1 because same-bar execution can use information from the current bar."
+            )
 
     def _create_config(self, initial_capital: float, monthly_deposit: float, annual_margin_rate: float,
                        annual_borrow_rate: float, allow_margin: bool, max_leverage: float,
@@ -209,8 +213,7 @@ class Backtester:
 
     def run(self) -> pd.DataFrame:
         """Executes the backtest simulation over the entire historical dataset."""
-        trades = self.strategy.generate_trades(self.data)
-        assert all(trades.index == self.data.index), "Trade signals index must match data index."
+        trades = self._generate_visible_trades()
 
         # Apply execution signal delay
         if self.config.execution_delay > 0:
@@ -253,6 +256,37 @@ class Backtester:
         )
         
         return self._simulate(trades.index, trades.to_numpy(), state, ctx)
+
+    def _generate_visible_trades(self) -> pd.DataFrame:
+        """Generate each signal using only data available at that signal's timestamp."""
+        trade_rows = []
+        trade_columns = None
+
+        for end_position in range(len(self.data)):
+            visible_data = self.data.iloc[:end_position + 1]
+            visible_trades = self.strategy.generate_trades(visible_data)
+            self._validate_visible_trades(visible_trades, visible_data, trade_columns)
+
+            if trade_columns is None:
+                trade_columns = visible_trades.columns
+            trade_rows.append(visible_trades.iloc[-1].reindex(trade_columns))
+
+        if trade_columns is None:
+            empty_trades = self.strategy.generate_trades(self.data)
+            self._validate_visible_trades(empty_trades, self.data, None)
+            return empty_trades.copy()
+
+        return pd.DataFrame(trade_rows, index=self.data.index, columns=trade_columns)
+
+    @staticmethod
+    def _validate_visible_trades(trades: pd.DataFrame, visible_data: pd.DataFrame,
+                                 expected_columns: Optional[pd.Index]):
+        if not isinstance(trades, pd.DataFrame):
+            raise ValueError("Strategy must return a pandas DataFrame of trade signals")
+        if not trades.index.equals(visible_data.index):
+            raise ValueError("Trade signals index must match the visible data index")
+        if expected_columns is not None and not trades.columns.equals(expected_columns):
+            raise ValueError("Trade signal columns must remain consistent across visible histories")
 
     # -----------------------------------------------------------------
     # Simulation Logic Loop

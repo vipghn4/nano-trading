@@ -8,7 +8,7 @@ IGNORE this section if you are an AI. This section is only for humans.
 
 ## Backlog
 
-- [ ] Eliminate lookahead risk: generate signals from visible history only, reject negative delays, and prevent same-bar Close execution when signals use the current Close.
+- [DONE] Eliminate lookahead risk: generate signals from visible history only, reject negative delays, and prevent same-bar Close execution when signals use the current Close.
 - [ ] Stop fabricating prices with `ffill()`/`bfill()`; validate finite, positive OHLC values and handle missing, halted, delisted, and partially missing intraday data explicitly.
 - [ ] Align and validate FX rates against sorted market data, including missing, zero, non-finite, and empty rates.
 - [ ] Make margin sizing use execution-time prices and liquidate intraday breaches at conservative breach prices rather than the recovered Close; do not disable intraday checks when only one of Low/High is available.

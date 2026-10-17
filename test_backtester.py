@@ -11,7 +11,7 @@ class MockStrategy(Strategy):
         self.signals_df = signals_df
 
     def generate_trades(self, data: pd.DataFrame) -> pd.DataFrame:
-        return self.signals_df
+        return self.signals_df.loc[data.index]
 
 
 class TestCommissionModel(unittest.TestCase):
@@ -437,7 +437,7 @@ class TestMarginRiskTiming(unittest.TestCase):
         # Day 0: Open=100, High=100, Low=50, Close=100.
         # This has a massive intraday drop, but the user is buying at the Close.
         # They should not be liquidated because they did not hold the position during the day.
-        dates = pd.date_range(start='2026-06-01', periods=1, freq='D')
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
         columns = pd.MultiIndex.from_tuples([
             ('ABC', 'Open'), ('ABC', 'High'), ('ABC', 'Low'), ('ABC', 'Close')
         ], names=['Ticker', 'Price'])
@@ -445,7 +445,7 @@ class TestMarginRiskTiming(unittest.TestCase):
         data.loc[dates[0], ('ABC', 'Low')] = 50.0  # Big intraday drop
         
         signals = pd.DataFrame(0.0, index=data.index, columns=['ABC'])
-        signals.iloc[0] = 10.0  # Buy 10 shares
+        signals.iloc[0] = 10.0  # Buy 10 shares after the first day's Close
         strategy = MockStrategy(signals)
         
         # Configure with max leverage 2.0, maintenance margin 25%, Close execution
@@ -458,7 +458,7 @@ class TestMarginRiskTiming(unittest.TestCase):
             max_leverage=2.0,
             maintenance_margin_pct=0.25,
             slippage_pct=0.0,
-            execution_delay=0,  # Execute on same day
+            execution_delay=1,  # Execute on the next day's Close
             execution_price_type='Close'
         )
         
@@ -470,8 +470,92 @@ class TestMarginRiskTiming(unittest.TestCase):
         self.assertFalse(tester.state.is_liquidated)
         self.assertEqual(tester.state.holdings[0], 10.0)
         # Cash should be 1000 - 10 * 100 = 0.0
-        self.assertAlmostEqual(results['cash'].iloc[0], 0.0)
-        self.assertAlmostEqual(results['holdings_value'].iloc[0], 1000.0)
+        self.assertAlmostEqual(results['cash'].iloc[1], 0.0)
+        self.assertAlmostEqual(results['holdings_value'].iloc[1], 1000.0)
+
+
+class TestLookaheadProtection(unittest.TestCase):
+    def setUp(self):
+        dates = pd.date_range(start='2026-06-01', periods=3, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        self.data = pd.DataFrame(
+            [[100.0, 100.0], [110.0, 110.0], [120.0, 200.0]],
+            index=dates,
+            columns=columns
+        )
+
+    def test_strategy_receives_only_history_through_current_bar(self):
+        class HistoryRecordingStrategy(Strategy):
+            def __init__(self):
+                self.visible_indexes = []
+
+            def generate_trades(self, data):
+                self.visible_indexes.append(data.index.copy())
+                return pd.DataFrame(0.0, index=data.index, columns=['ABC'])
+
+        strategy = HistoryRecordingStrategy()
+        Backtester(
+            data=self.data,
+            strategy=strategy,
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        ).run()
+
+        self.assertEqual(len(strategy.visible_indexes), len(self.data.index))
+        for actual, expected in zip(strategy.visible_indexes, [
+            self.data.index[:1], self.data.index[:2], self.data.index[:3]
+        ]):
+            self.assertTrue(actual.equals(expected))
+
+    def test_future_data_cannot_create_an_earlier_signal(self):
+        class FutureDependentStrategy(Strategy):
+            def generate_trades(self, data):
+                signals = pd.DataFrame(0.0, index=data.index, columns=['ABC'])
+                if data[('ABC', 'Close')].max() >= 200.0:
+                    signals.iloc[0] = 1.0
+                return signals
+
+        tester = Backtester(
+            data=self.data,
+            strategy=FutureDependentStrategy(),
+            initial_capital=1000.0,
+            monthly_deposit=0.0,
+            slippage_pct=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        results = tester.run()
+
+        self.assertTrue((results['holdings_value'] == 0.0).all())
+
+    def test_current_close_cannot_create_same_bar_trade(self):
+        signals = pd.DataFrame(0.0, index=self.data.index, columns=['ABC'])
+        signals.iloc[0] = 1.0
+
+        with self.assertRaisesRegex(ValueError, 'execution_delay must be at least 1'):
+            Backtester(
+                data=self.data,
+                strategy=MockStrategy(signals),
+                monthly_deposit=0.0,
+                execution_delay=0,
+                execution_price_type='Close'
+            )
+
+    def test_negative_execution_delay_is_rejected(self):
+        signals = pd.DataFrame(0.0, index=self.data.index, columns=['ABC'])
+
+        with self.assertRaisesRegex(ValueError, 'execution_delay cannot be negative'):
+            Backtester(
+                data=self.data,
+                strategy=MockStrategy(signals),
+                monthly_deposit=0.0,
+                execution_delay=-1,
+                execution_price_type='Open'
+            )
 
 
 if __name__ == '__main__':
