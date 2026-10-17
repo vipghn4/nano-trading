@@ -1,11 +1,4 @@
 import os
-import sys
-
-# Automatically run within the local virtual environment (.venv) if it exists
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_venv_python = os.path.join(_current_dir, ".venv", "bin", "python3")
-if os.path.exists(_venv_python) and not sys.executable.startswith(os.path.join(_current_dir, ".venv")):
-    os.execv(_venv_python, [_venv_python] + sys.argv)
 
 from yfinance_data_provider import YFinanceDataProvider
 from utils import get_market_risk_free_rate
