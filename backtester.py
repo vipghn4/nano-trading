@@ -674,16 +674,22 @@ class Backtester:
         return val_account - comm_usd / rate
 
     def _finalize_results(self, cash_hist: np.ndarray, val_hist: np.ndarray, deposit_hist: np.ndarray) -> pd.DataFrame:
-        """Formats the simulated historical timelines into a final output DataFrame with net returns."""
+        """Format timelines and calculate real per-bar time-weighted returns.
+
+        The first row is the first simulated bar, not a synthetic placeholder:
+        its return starts with initial capital plus that bar's deposit and ends
+        with the first bar's closing equity.
+        """
         res = pd.DataFrame(index=self.data.index)
         res['cash'] = cash_hist
         res['holdings_value'] = val_hist
         res['total_equity'] = res['cash'] + res['holdings_value']
         
-        # Calculate daily returns net of capital deposits (deposits are inflows at the start of the day)
-        # return_t = (Equity_t - Deposit_t - Equity_t-1) / Equity_t-1
+        # Calculate returns net of capital deposits made before the period's trading.
+        # A start-of-period deposit increases the capital exposed to that period's return.
         prev_equity = res['total_equity'].shift(1).fillna(self.config.initial_capital)
-        res['returns'] = (res['total_equity'] - deposit_hist - prev_equity) / prev_equity
-        res['returns'] = res['returns'].fillna(0.0)
+        start_equity = prev_equity + deposit_hist
+        res['returns'] = (res['total_equity'] - start_equity) / start_equity
+        res['returns'] = res['returns'].where(start_equity > 0.0)
         
         return res
