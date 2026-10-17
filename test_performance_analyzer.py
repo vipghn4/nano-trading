@@ -6,6 +6,7 @@ import pandas as pd
 from backtester import Backtester
 from data_structures import Strategy
 from performance_analyzer import PerformanceAnalyzer
+from performance_metrics import PerformanceMetricsCalculator
 
 
 class TestPerformanceMetrics(unittest.TestCase):
@@ -79,8 +80,7 @@ class TestPerformanceMetrics(unittest.TestCase):
             },
             index=pd.date_range('2026-01-01', periods=2),
         )
-        analyzer = self._analyzer(results)
-        metrics = analyzer._get_return_metrics(results)
+        metrics = self._display_metrics(results)
         expected_cagr = np.expm1(np.log(1.10) * 365.25 / 2.0)
 
         self.assertEqual(metrics['Time-Weighted Return'], '10.00%')
@@ -95,8 +95,8 @@ class TestPerformanceMetrics(unittest.TestCase):
             },
             index=pd.to_datetime(['2026-01-01', '2026-02-01', '2026-02-02']),
         )
-        analyzer = self._analyzer(results)
-        durations, elapsed_days = analyzer._get_period_timing(results.index)
+        calculator = PerformanceMetricsCalculator()
+        durations, elapsed_days = calculator._get_period_timing(results.index)
         np.testing.assert_allclose(durations, [1.0, 31.0, 1.0])
         self.assertEqual(elapsed_days, 33.0)
         log_returns = np.log1p(results['returns'].to_numpy())
@@ -105,7 +105,7 @@ class TestPerformanceMetrics(unittest.TestCase):
         expected_vol = np.sqrt(np.dot(residuals, residuals) / elapsed_days * 365.25)
         expected_sharpe = mean_log_rate * 365.25 / expected_vol
 
-        metrics = analyzer._get_risk_metrics(results)
+        metrics = self._display_metrics(results)
 
         self.assertEqual(metrics['Annualized Vol'], f'{expected_vol:.2%}')
         self.assertEqual(metrics['Sharpe Ratio'], f'{expected_sharpe:.2f}')
@@ -120,7 +120,7 @@ class TestPerformanceMetrics(unittest.TestCase):
                 },
                 index=index,
             )
-            return self._analyzer(results)._get_risk_metrics(results)
+            return self._display_metrics(results)
 
         one_day = metrics_for_move(1)
         ten_day = metrics_for_move(10)
@@ -132,28 +132,21 @@ class TestPerformanceMetrics(unittest.TestCase):
         )
 
     def test_invalid_returns_and_equity_are_reported_as_unavailable(self):
-        analyzer = self._analyzer(
-            pd.DataFrame(
-                {
-                    'returns': [0.1, 0.1],
-                    'total_equity': [100.0, -50.0],
-                },
-                index=pd.date_range('2026-01-01', periods=2),
-            )
+        results = pd.DataFrame(
+            {
+                'returns': [0.1, 0.1],
+                'total_equity': [100.0, -50.0],
+            },
+            index=pd.date_range('2026-01-01', periods=2),
         )
+        metrics = self._display_metrics(results)
 
-        self.assertEqual(analyzer._get_return_metrics(analyzer.portfolio_results), {
-            'Time-Weighted Return': 'N/A',
-            'Total Return': 'N/A',
-            'CAGR': 'N/A',
-        })
-        self.assertEqual(analyzer._get_risk_metrics(analyzer.portfolio_results), {
-            'Annualized Vol': 'N/A',
-            'Sharpe Ratio': 'N/A',
-        })
-        self.assertEqual(analyzer._get_drawdown_metrics(analyzer.portfolio_results), {
-            'Max Drawdown': 'N/A',
-        })
+        self.assertEqual(metrics['Time-Weighted Return'], 'N/A')
+        self.assertEqual(metrics['Total Return'], 'N/A')
+        self.assertEqual(metrics['CAGR'], 'N/A')
+        self.assertEqual(metrics['Annualized Vol'], 'N/A')
+        self.assertEqual(metrics['Sharpe Ratio'], 'N/A')
+        self.assertEqual(metrics['Max Drawdown'], 'N/A')
 
     def test_unsorted_and_duplicate_indices_make_all_time_series_metrics_unavailable(self):
         for index in (
@@ -168,20 +161,14 @@ class TestPerformanceMetrics(unittest.TestCase):
                     },
                     index=index,
                 )
-                analyzer = self._analyzer(results)
+                metrics = self._display_metrics(results)
 
-                self.assertEqual(analyzer._get_return_metrics(results), {
-                    'Time-Weighted Return': 'N/A',
-                    'Total Return': 'N/A',
-                    'CAGR': 'N/A',
-                })
-                self.assertEqual(analyzer._get_risk_metrics(results), {
-                    'Annualized Vol': 'N/A',
-                    'Sharpe Ratio': 'N/A',
-                })
-                self.assertEqual(analyzer._get_drawdown_metrics(results), {
-                    'Max Drawdown': 'N/A',
-                })
+                self.assertEqual(metrics['Time-Weighted Return'], 'N/A')
+                self.assertEqual(metrics['Total Return'], 'N/A')
+                self.assertEqual(metrics['CAGR'], 'N/A')
+                self.assertEqual(metrics['Annualized Vol'], 'N/A')
+                self.assertEqual(metrics['Sharpe Ratio'], 'N/A')
+                self.assertEqual(metrics['Max Drawdown'], 'N/A')
 
     def test_invalid_risk_free_rate_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'risk_free_rate'):
@@ -201,9 +188,7 @@ class TestPerformanceMetrics(unittest.TestCase):
             },
             index=pd.date_range('2026-01-01', periods=2),
         )
-        analyzer = self._analyzer(results)
-
-        metrics = analyzer._get_risk_metrics(results)
+        metrics = self._display_metrics(results)
 
         self.assertEqual(metrics['Annualized Vol'], '0.00%')
         self.assertEqual(metrics['Sharpe Ratio'], 'N/A')
@@ -233,6 +218,11 @@ class TestPerformanceMetrics(unittest.TestCase):
             strategy=object(),
             data=pd.DataFrame(),
         )
+
+    @staticmethod
+    def _display_metrics(results):
+        calculated = PerformanceMetricsCalculator().calculate(results, 0)
+        return calculated.to_display_dict()
 
 
 if __name__ == '__main__':
