@@ -474,6 +474,575 @@ class TestMarginRiskTiming(unittest.TestCase):
         self.assertAlmostEqual(results['holdings_value'].iloc[1], 1000.0)
 
 
+class TestPriceDataIntegrity(unittest.TestCase):
+    """Regression tests for unavailable and invalid market observations."""
+
+    def _signals(self, index, quantity=1.0):
+        signals = pd.DataFrame(0.0, index=index, columns=['ABC'])
+        signals.iloc[0] = quantity
+        return MockStrategy(signals)
+
+    def test_missing_execution_price_rejects_the_order_without_fabricating_a_fill(self):
+        dates = pd.date_range(start='2026-06-01', periods=3, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(
+            [[100.0, 100.0], [np.nan, 100.0], [100.0, 100.0]],
+            index=dates,
+            columns=columns
+        )
+
+        tester = Backtester(
+            data=data,
+            strategy=self._signals(data.index),
+            initial_capital=1000.0,
+            monthly_deposit=0.0,
+            slippage_pct=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        with self.assertRaisesRegex(ValueError, 'Open price'):
+            tester.run()
+
+        self.assertEqual(tester.state.executed_trades_count, 0)
+
+    def test_non_positive_or_non_finite_execution_price_is_unavailable(self):
+        for invalid_price in (0.0, -1.0, np.inf, np.nan):
+            with self.subTest(invalid_price=invalid_price):
+                dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+                columns = pd.MultiIndex.from_tuples([
+                    ('ABC', 'Open'), ('ABC', 'Close')
+                ], names=['Ticker', 'Price'])
+                data = pd.DataFrame(100.0, index=dates, columns=columns)
+                data.loc[dates[1], ('ABC', 'Open')] = invalid_price
+
+                tester = Backtester(
+                    data=data,
+                    strategy=self._signals(data.index),
+                    initial_capital=1000.0,
+                    monthly_deposit=0.0,
+                    slippage_pct=0.0,
+                    execution_delay=1,
+                    execution_price_type='Open'
+                )
+
+                with self.assertRaisesRegex(ValueError, 'Open price'):
+                    tester.run()
+
+    def test_non_positive_or_non_finite_close_rejects_active_valuation(self):
+        for invalid_price in (0.0, -1.0, np.inf, -np.inf, np.nan):
+            with self.subTest(invalid_price=invalid_price):
+                dates = pd.date_range(start='2026-06-01', periods=3, freq='D')
+                columns = pd.MultiIndex.from_tuples([
+                    ('ABC', 'Open'), ('ABC', 'Close')
+                ], names=['Ticker', 'Price'])
+                data = pd.DataFrame(100.0, index=dates, columns=columns)
+                data.loc[dates[2], ('ABC', 'Close')] = invalid_price
+
+                tester = Backtester(
+                    data=data,
+                    strategy=self._signals(data.index),
+                    initial_capital=1000.0,
+                    monthly_deposit=0.0,
+                    slippage_pct=0.0,
+                    execution_delay=1,
+                    execution_price_type='Open'
+                )
+
+                with self.assertRaisesRegex(ValueError, 'Close price'):
+                    tester.run()
+
+    def test_missing_close_after_entry_rejects_unavailable_valuation(self):
+        dates = pd.date_range(start='2026-06-01', periods=3, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[2], ('ABC', 'Close')] = np.nan
+
+        tester = Backtester(
+            data=data,
+            strategy=self._signals(data.index, quantity=1.0),
+            initial_capital=1000.0,
+            monthly_deposit=0.0,
+            slippage_pct=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        with self.assertRaisesRegex(ValueError, 'Close price unavailable'):
+            tester.run()
+
+    def test_halted_bar_with_all_ohlc_missing_has_no_synthetic_price(self):
+        dates = pd.date_range(start='2026-06-01', periods=3, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'High'), ('ABC', 'Low'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[1], :] = np.nan
+
+        tester = Backtester(
+            data=data,
+            strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC'])),
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        results = tester.run()
+
+        self.assertTrue((results['holdings_value'] == 0.0).all())
+        self.assertTrue((results['cash'] == 1000.0).all())
+        self.assertEqual(tester.state.executed_trades_count, 0)
+
+    def test_trailing_delisted_data_cannot_reuse_the_last_close(self):
+        dates = pd.date_range(start='2026-06-01', periods=3, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'High'), ('ABC', 'Low'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[2], :] = np.nan
+
+        tester = Backtester(
+            data=data,
+            strategy=self._signals(data.index),
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        with self.assertRaisesRegex(ValueError, 'Close price unavailable'):
+            tester.run()
+
+    def test_pending_order_after_delisting_is_not_filled(self):
+        dates = pd.date_range(start='2026-06-01', periods=3, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[2], :] = np.nan
+        signals = pd.DataFrame(0.0, index=dates, columns=['ABC'])
+        signals.iloc[1] = 1.0
+
+        tester = Backtester(
+            data=data,
+            strategy=MockStrategy(signals),
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        with self.assertRaisesRegex(ValueError, 'Open price unavailable'):
+            tester.run()
+
+    def test_missing_close_cannot_be_used_for_short_borrow_fees(self):
+        state = PortfolioState(cash=0.0, num_tickers=1)
+        state.holdings[0] = -1.0
+
+        with self.assertRaisesRegex(ValueError, 'borrow fees require'):
+            state.apply_short_borrow_fee(0, np.nan, 0.1 / 360.0, 1)
+
+    def test_missing_close_cannot_be_used_for_margin_sizing(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        tester = Backtester(
+            data=data,
+            strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC'])),
+            monthly_deposit=0.0,
+            allow_margin=True,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+        state = PortfolioState(cash=1000.0, num_tickers=1)
+        state.holdings[0] = 1.0
+
+        with self.assertRaisesRegex(ValueError, 'Active holdings require'):
+            tester._clamp_buy_quantity(
+                1, 0, 1.0, 100.0, state, np.array([[100.0], [np.nan]]), 1.0
+            )
+
+    def test_missing_close_cannot_be_used_for_liquidation(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        tester = Backtester(
+            data=data,
+            strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC'])),
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+        state = PortfolioState(cash=1000.0, num_tickers=1)
+        state.holdings[0] = 1.0
+
+        with self.assertRaisesRegex(ValueError, 'Close price unavailable'):
+            tester._liquidate_ticker(
+                1, 0, 1.0, dates[1], state, np.array([[100.0], [np.nan]]), 1.0, 'ABC'
+            )
+
+    def test_missing_close_cannot_be_used_for_intraday_margin(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'High'), ('ABC', 'Low'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        tester = Backtester(
+            data=data,
+            strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC'])),
+            monthly_deposit=0.0,
+            allow_margin=True,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+        state = PortfolioState(cash=1000.0, num_tickers=1)
+        state.holdings[0] = 1.0
+
+        with self.assertRaisesRegex(ValueError, 'Close price unavailable'):
+            tester._check_intraday_margin(
+                1,
+                state,
+                np.array([[100.0], [np.nan]]),
+                np.array([[100.0], [100.0]]),
+                np.array([[100.0], [100.0]]),
+                ['ABC'],
+                1.0,
+            )
+
+    def test_mixed_valid_and_invalid_tickers_fail_with_the_invalid_ticker(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close'), ('XYZ', 'Open'), ('XYZ', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[1], ('XYZ', 'Close')] = np.inf
+        signals = pd.DataFrame(0.0, index=dates, columns=['ABC', 'XYZ'])
+
+        tester = Backtester(
+            data=data,
+            strategy=MockStrategy(signals),
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        with self.assertRaisesRegex(ValueError, 'Close price invalid for XYZ'):
+            tester.run()
+
+    def test_partial_intraday_bounds_fall_back_to_observed_close(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'High'), ('ABC', 'Low'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[1], ('ABC', 'Low')] = np.nan
+
+        tester = Backtester(
+            data=data,
+            strategy=self._signals(data.index, quantity=20.0),
+            initial_capital=1000.0,
+            monthly_deposit=0.0,
+            allow_margin=True,
+            max_leverage=2.0,
+            maintenance_margin_pct=0.25,
+            slippage_pct=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        tester.run()
+
+        self.assertEqual(tester.state.holdings[0], 20.0)
+        self.assertFalse(tester.state.is_liquidated)
+
+    def test_missing_intraday_bound_cells_fall_back_to_close(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'High'), ('ABC', 'Low'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+
+        for bound, quantity in (('Low', 20.0), ('High', -20.0)):
+            for missing_value in (np.nan, pd.NA):
+                with self.subTest(bound=bound, missing_value=missing_value):
+                    data = pd.DataFrame(100.0, index=dates, columns=columns)
+                    data[('ABC', bound)] = data[('ABC', bound)].astype(object)
+                    data.loc[dates[1], ('ABC', bound)] = missing_value
+                    tester = Backtester(
+                        data=data,
+                        strategy=self._signals(data.index, quantity=quantity),
+                        initial_capital=1000.0,
+                        monthly_deposit=0.0,
+                        allow_margin=True,
+                        allow_short=True,
+                        max_leverage=2.0,
+                        maintenance_margin_pct=0.25,
+                        slippage_pct=0.0,
+                        execution_delay=1,
+                        execution_price_type='Open'
+                    )
+
+                    prices = tester._extract_price_matrix(bound, ['ABC'])
+                    self.assertTrue(np.isnan(prices[1, 0]))
+                    tester.run()
+
+                    self.assertEqual(tester.state.holdings[0], quantity)
+                    self.assertFalse(tester.state.is_liquidated)
+
+    def test_available_high_is_used_for_short_risk_when_low_is_missing(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'High'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[1], ('ABC', 'High')] = 150.0
+
+        tester = Backtester(
+            data=data,
+            strategy=self._signals(data.index, quantity=-20.0),
+            initial_capital=1000.0,
+            monthly_deposit=0.0,
+            allow_margin=True,
+            allow_short=True,
+            max_leverage=2.0,
+            maintenance_margin_pct=0.25,
+            slippage_pct=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        tester.run()
+
+        self.assertEqual(tester.state.holdings[0], 0.0)
+        self.assertTrue(tester.state.is_liquidated)
+
+    def test_available_low_is_used_for_long_risk_when_high_is_missing(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Low'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[1], ('ABC', 'Low')] = 50.0
+
+        tester = Backtester(
+            data=data,
+            strategy=self._signals(data.index, quantity=20.0),
+            initial_capital=1000.0,
+            monthly_deposit=0.0,
+            allow_margin=True,
+            max_leverage=2.0,
+            maintenance_margin_pct=0.25,
+            slippage_pct=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        tester.run()
+
+        self.assertEqual(tester.state.holdings[0], 0.0)
+        self.assertTrue(tester.state.is_liquidated)
+
+    def test_absent_intraday_bounds_use_close_margin_checks(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+
+        tester = Backtester(
+            data=data,
+            strategy=self._signals(data.index, quantity=20.0),
+            initial_capital=1000.0,
+            monthly_deposit=0.0,
+            allow_margin=True,
+            max_leverage=2.0,
+            maintenance_margin_pct=0.25,
+            slippage_pct=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        tester.run()
+
+        self.assertEqual(tester.state.holdings[0], 20.0)
+        self.assertFalse(tester.state.is_liquidated)
+
+    def test_invalid_present_intraday_bound_is_rejected(self):
+        for invalid_price in (np.inf, -np.inf, 0.0, -1.0, 'not-a-price'):
+            with self.subTest(invalid_price=invalid_price):
+                dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+                columns = pd.MultiIndex.from_tuples([
+                    ('ABC', 'Open'), ('ABC', 'Low'), ('ABC', 'Close')
+                ], names=['Ticker', 'Price'])
+                data = pd.DataFrame(100.0, index=dates, columns=columns)
+                if isinstance(invalid_price, str):
+                    data[('ABC', 'Low')] = data[('ABC', 'Low')].astype(object)
+                data.loc[dates[1], ('ABC', 'Low')] = invalid_price
+
+                tester = Backtester(
+                    data=data,
+                    strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC'])),
+                    monthly_deposit=0.0,
+                    execution_delay=1,
+                    execution_price_type='Open'
+                )
+
+                with self.assertRaisesRegex(ValueError, 'Low price invalid'):
+                    tester.run()
+
+    def test_missing_high_is_allowed_but_invalid_high_is_not(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Low'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        for invalid_price in (np.inf, -np.inf, 0.0, -1.0):
+            with self.subTest(invalid_price=invalid_price):
+                data = pd.DataFrame(100.0, index=dates, columns=columns)
+                data[('ABC', 'High')] = 100.0
+                data.loc[dates[1], ('ABC', 'High')] = invalid_price
+                tester = Backtester(
+                    data=data,
+                    strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC'])),
+                    monthly_deposit=0.0,
+                    execution_delay=1,
+                    execution_price_type='Open'
+                )
+                with self.assertRaisesRegex(ValueError, 'High price invalid'):
+                    tester.run()
+
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        tester = Backtester(
+            data=data,
+            strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC'])),
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+        tester.run()
+
+    def test_all_supplied_ohlc_fields_reject_invalid_values(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'High'), ('ABC', 'Low'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        invalid_values = (np.inf, -np.inf, 0.0, -1.0)
+
+        for field in ('Open', 'High', 'Low', 'Close'):
+            for invalid_value in invalid_values:
+                with self.subTest(field=field, invalid_value=invalid_value):
+                    data = pd.DataFrame(100.0, index=dates, columns=columns)
+                    data.loc[dates[1], ('ABC', field)] = invalid_value
+                    tester = Backtester(
+                        data=data,
+                        strategy=self._signals(data.index),
+                        monthly_deposit=0.0,
+                        execution_delay=1,
+                        execution_price_type='Open'
+                    )
+
+                    with self.assertRaises(ValueError):
+                        tester.run()
+
+    def test_mixed_tickers_keep_valid_prices_isolated_before_fail_fast(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close'), ('XYZ', 'Open'), ('XYZ', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[1], ('ABC', 'Close')] = 123.0
+        data.loc[dates[1], ('XYZ', 'Close')] = np.inf
+        tester = Backtester(
+            data=data,
+            strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC', 'XYZ'])),
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        np.testing.assert_array_equal(
+            tester._extract_price_matrix('Close', ['ABC']),
+            np.array([[100.0], [123.0]])
+        )
+        with self.assertRaisesRegex(ValueError, 'Close price invalid for XYZ'):
+            tester.run()
+
+    def test_leading_internal_and_trailing_gaps_do_not_leak_neighbor_prices(self):
+        dates = pd.date_range(start='2026-06-01', periods=3, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        gap_cases = (
+            [np.nan, 111.0, 999.0],
+            [100.0, np.nan, 999.0],
+            [100.0, 111.0, np.nan],
+        )
+        for values in gap_cases:
+            with self.subTest(values=values):
+                data = pd.DataFrame({
+                    ('ABC', 'Open'): values,
+                    ('ABC', 'Close'): values,
+                }, index=dates)
+                data.columns = columns
+                tester = Backtester(
+                    data=data,
+                    strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC'])),
+                    monthly_deposit=0.0,
+                    execution_delay=1,
+                    execution_price_type='Open'
+                )
+                np.testing.assert_equal(
+                    tester._extract_price_matrix('Open', ['ABC']).ravel(),
+                    np.asarray(values, dtype=float)
+                )
+
+    def test_close_is_required_for_the_requested_simulation(self):
+        dates = pd.date_range(start='2026-06-01', periods=2, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+
+        tester = Backtester(
+            data=data,
+            strategy=self._signals(data.index),
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        with self.assertRaisesRegex(KeyError, 'Close'):
+            tester.run()
+
+    def test_price_preparation_is_deterministic_and_does_not_mutate_input(self):
+        dates = pd.date_range(start='2026-06-01', periods=3, freq='D')
+        columns = pd.MultiIndex.from_tuples([
+            ('ABC', 'Open'), ('ABC', 'Close')
+        ], names=['Ticker', 'Price'])
+        data = pd.DataFrame(100.0, index=dates, columns=columns)
+        data.loc[dates[1], ('ABC', 'Open')] = np.nan
+        original_data = data.copy(deep=True)
+
+        tester = Backtester(
+            data=data,
+            strategy=MockStrategy(pd.DataFrame(0.0, index=dates, columns=['ABC'])),
+            initial_capital=1000.0,
+            monthly_deposit=0.0,
+            execution_delay=1,
+            execution_price_type='Open'
+        )
+
+        first_results = tester.run()
+        second_results = tester.run()
+
+        pd.testing.assert_frame_equal(first_results, second_results)
+        pd.testing.assert_frame_equal(data, original_data)
+
+
 class TestLookaheadProtection(unittest.TestCase):
     def setUp(self):
         dates = pd.date_range(start='2026-06-01', periods=3, freq='D')

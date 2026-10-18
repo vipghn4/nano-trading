@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from typing import Optional
+from price_validation import is_valid_price, validate_active_prices
 
 @dataclass
 class TaxLot:
@@ -44,7 +45,9 @@ class PortfolioState:
 
     def get_holdings_value(self, close_prices: np.ndarray) -> float:
         """Return the mark-to-market value of all active holdings."""
-        return float(np.nansum(self.holdings * close_prices))
+        active = self.holdings != 0.0
+        validate_active_prices(close_prices, self.holdings)
+        return float(np.sum(self.holdings[active] * close_prices[active]))
 
     def get_equity(self, close_prices: np.ndarray, fx_rate: float = 1.0) -> float:
         """Return the total portfolio equity value in the account currency (cash plus converted holdings value)."""
@@ -52,7 +55,9 @@ class PortfolioState:
 
     def get_gross_exposure(self, close_prices: np.ndarray, fx_rate: float = 1.0) -> float:
         """Return the gross absolute holdings exposure value converted to the account currency."""
-        return float(np.nansum(np.abs(self.holdings) * close_prices)) / fx_rate
+        active = self.holdings != 0.0
+        validate_active_prices(close_prices, self.holdings)
+        return float(np.sum(np.abs(self.holdings[active] * close_prices[active]))) / fx_rate
 
     def apply_interest(self, margin_rate_daily: float, days_elapsed: int):
         """Charge compounding margin interest on any negative cash balances."""
@@ -61,6 +66,8 @@ class PortfolioState:
 
     def apply_short_borrow_fee(self, ticker_idx: int, close_price: float, borrow_rate_daily: float, days_elapsed: int, fx_rate: float = 1.0):
         """Charge borrowing fees on active short positions."""
+        if not is_valid_price(close_price):
+            raise ValueError("Short borrow fees require finite, strictly positive market prices")
         short_value = abs(self.holdings[ticker_idx] * close_price)
         fee = short_value * ((1.0 + borrow_rate_daily) ** days_elapsed - 1.0)
         self.cash -= fee / fx_rate

@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from data_structures import Strategy
 from portfolio_state import PortfolioState
+from price_validation import is_valid_price, valid_price_mask
 from trading_models import (
     CommissionModel, DefaultCommissionModel,
     SlippageModel, DefaultSlippageModel,
@@ -212,7 +213,14 @@ class Backtester:
         return 0.0
 
     def run(self) -> pd.DataFrame:
-        """Executes the backtest simulation over the entire historical dataset."""
+        """Run the simulation without inventing unavailable prices.
+
+        Orders and active holdings require finite, positive execution and Close
+        prices. Missing Low/High observations use the observed Close for that
+        side; supplied invalid bounds fail fast. Missing execution/Close data
+        causes the affected fill or mark to fail; halted or delisted positions
+        receive no synthetic settlement.
+        """
         trades = self._generate_visible_trades()
 
         # Apply execution signal delay
@@ -222,23 +230,10 @@ class Backtester:
         tickers = trades.columns.tolist()
         num_tickers = len(tickers)
         
-        # Pre-extract matrices and forward-fill to prevent NaNs in daily valuations/halts
-        try:
-            df_open = self.data.xs(self.config.execution_price_type, level=1, axis=1).reindex(columns=tickers).ffill().bfill()
-            df_close = self.data.xs('Close', level=1, axis=1).reindex(columns=tickers).ffill().bfill()
-            
-            exec_prices = df_open.to_numpy()
-            close_prices = df_close.to_numpy()
-            
-            # Extract Low/High for intraday margin checking if present
-            try:
-                df_low = self.data.xs('Low', level=1, axis=1).reindex(columns=tickers).ffill().bfill().to_numpy()
-                df_high = self.data.xs('High', level=1, axis=1).reindex(columns=tickers).ffill().bfill().to_numpy()
-            except KeyError:
-                df_low = None
-                df_high = None
-        except KeyError as e:
-            raise KeyError(f"Pricing metric level error in input: {e}")
+        exec_prices = self._extract_price_matrix(self.config.execution_price_type, tickers)
+        close_prices = self._extract_price_matrix('Close', tickers)
+        df_low = self._extract_optional_price_matrix('Low', tickers)
+        df_high = self._extract_optional_price_matrix('High', tickers)
 
         self.tax_model.reset()
         state = PortfolioState(
@@ -256,6 +251,51 @@ class Backtester:
         )
         
         return self._simulate(trades.index, trades.to_numpy(), state, ctx)
+
+    def _extract_price_matrix(self, price_type: str, tickers: List[str]) -> np.ndarray:
+        """Return raw prices and reject invalid values that were actually supplied."""
+        try:
+            raw_frame = self.data.xs(price_type, level=1, axis=1)
+        except KeyError as exc:
+            raise KeyError(f"Pricing metric level error in input: {exc}") from exc
+        frame = raw_frame.reindex(columns=tickers)
+        prices = frame.apply(pd.to_numeric, errors='coerce')
+        missing = frame.isna().to_numpy()
+        values = prices.to_numpy(dtype=float)
+        invalid = ~missing & ~valid_price_mask(values)
+        if invalid.any():
+            row, column = np.argwhere(invalid)[0]
+            raise ValueError(
+                f"{price_type} price invalid for {tickers[column]} at {self.data.index[row]}; "
+                "present prices must be finite and strictly positive"
+            )
+        return values
+
+    def _extract_optional_price_matrix(self, price_type: str, tickers: List[str]) -> Optional[np.ndarray]:
+        """Return optional raw OHLC data; missing fields are allowed, invalid values are not."""
+        try:
+            return self._extract_price_matrix(price_type, tickers)
+        except KeyError:
+            return None
+
+    def _require_price(self, prices: np.ndarray, date_idx: int, ticker_idx: int,
+                       metric: str, ticker: str) -> float:
+        """Return a valid price or fail instead of inventing one."""
+        price = prices[date_idx, ticker_idx]
+        if not is_valid_price(price):
+            date = self.data.index[date_idx]
+            raise ValueError(
+                f"{metric} price unavailable for {ticker} at {date}; "
+                "a finite, strictly positive observed price is required"
+            )
+        return float(price)
+
+    def _validate_active_close_prices(self, date_idx: int, state: PortfolioState,
+                                      close_prices: np.ndarray, tickers: List[str]) -> None:
+        """Require an observed Close for every position that needs a mark."""
+        for ticker_idx, holding in enumerate(state.holdings):
+            if holding != 0.0:
+                self._require_price(close_prices, date_idx, ticker_idx, 'Close', tickers[ticker_idx])
 
     def _generate_visible_trades(self) -> pd.DataFrame:
         """Generate each signal using only data available at that signal's timestamp."""
@@ -397,7 +437,9 @@ class Backtester:
         for ticker_idx in range(len(tickers)):
             if state.holdings[ticker_idx] < 0.0:
                 price_idx = date_idx - 1 if date_idx > 0 else 0
-                close_price = close_prices_arr[price_idx, ticker_idx]
+                close_price = self._require_price(
+                    close_prices_arr, price_idx, ticker_idx, 'Close', tickers[ticker_idx]
+                )
                 state.apply_short_borrow_fee(ticker_idx, close_price, self.config.borrow_rate_daily, days_elapsed, rate)
 
         # 2. Execution order: process sells (qty < 0) first to release cash/buying power
@@ -410,13 +452,18 @@ class Backtester:
             if qty == 0.0:
                 continue
                 
-            price = exec_prices_arr[date_idx, ticker_idx]
-            if pd.isna(price) or price <= 0.0:
-                continue
+            price = self._require_price(
+                exec_prices_arr,
+                date_idx,
+                ticker_idx,
+                self.config.execution_price_type,
+                tickers[ticker_idx],
+            )
                 
             self._execute_trade(date_idx, ticker_idx, qty, price, state, close_prices_arr, rate)
             
         # 3. Encapsulated portfolio valuation from PortfolioState (returns USD value)
+        self._validate_active_close_prices(date_idx, state, close_prices_arr, tickers)
         return state.get_holdings_value(close_prices_arr[date_idx])
 
     # -----------------------------------------------------------------
@@ -590,7 +637,7 @@ class Backtester:
                 self._liquidate_portfolio(date_idx, state, close_prices_arr, tickers, rate)
             return
             
-        if low_prices_arr is not None and high_prices_arr is not None:
+        if low_prices_arr is not None or high_prices_arr is not None:
             self._check_intraday_margin(date_idx, state, close_prices_arr, low_prices_arr, high_prices_arr, tickers, rate)
         else:
             self._check_close_margin(date_idx, state, close_prices_arr, tickers, rate)
@@ -600,11 +647,21 @@ class Backtester:
         """Checks for maintenance margin violations using intraday Low/High prices to prevent liquidation delay."""
         worst_prices = np.zeros(len(tickers))
         for j in range(len(tickers)):
-            worst_prices[j] = low_prices_arr[date_idx, j] if state.holdings[j] >= 0.0 else high_prices_arr[date_idx, j]
+            if state.holdings[j] == 0.0:
+                continue
+            close_price = self._require_price(
+                close_prices_arr, date_idx, j, 'Close', tickers[j]
+            )
+            if state.holdings[j] >= 0.0:
+                low_price = low_prices_arr[date_idx, j] if low_prices_arr is not None else np.nan
+                worst_prices[j] = low_price if is_valid_price(low_price) else close_price
+            else:
+                high_price = high_prices_arr[date_idx, j] if high_prices_arr is not None else np.nan
+                worst_prices[j] = high_price if is_valid_price(high_price) else close_price
         
-        worst_holdings_val = float(np.nansum(state.holdings * worst_prices))
+        worst_holdings_val = float(np.sum(state.holdings * worst_prices))
         worst_equity = state.cash + worst_holdings_val / rate
-        worst_gross_exposure = float(np.nansum(np.abs(state.holdings) * worst_prices)) / rate
+        worst_gross_exposure = float(np.sum(np.abs(state.holdings) * worst_prices)) / rate
         
         if worst_gross_exposure > 0.0:
             margin_ratio = worst_equity / worst_gross_exposure
@@ -614,6 +671,7 @@ class Backtester:
     def _check_close_margin(self, date_idx: int, state: PortfolioState, close_prices_arr: np.ndarray,
                             tickers: List[str], rate: float):
         """Checks for maintenance margin violations using Close prices at end of day."""
+        self._validate_active_close_prices(date_idx, state, close_prices_arr, tickers)
         equity = state.get_equity(close_prices_arr[date_idx], rate)
         gross_exposure = state.get_gross_exposure(close_prices_arr[date_idx], rate)
         
@@ -629,14 +687,17 @@ class Backtester:
         for ticker_idx in range(len(tickers)):
             qty = state.holdings[ticker_idx]
             if qty != 0.0:
-                self._liquidate_ticker(date_idx, ticker_idx, qty, date, state, close_prices_arr, rate)
+                self._liquidate_ticker(
+                    date_idx, ticker_idx, qty, date, state, close_prices_arr, rate, tickers[ticker_idx]
+                )
 
     def _liquidate_ticker(self, date_idx: int, ticker_idx: int, qty: float, date: pd.Timestamp,
-                          state: PortfolioState, close_prices_arr: np.ndarray, rate: float):
+                          state: PortfolioState, close_prices_arr: np.ndarray, rate: float,
+                          ticker: str):
         """Liquidates a single ticker position at Close price, updating cash and realized gains/losses."""
-        price = close_prices_arr[date_idx, ticker_idx]
-        if pd.isna(price) or price <= 0.0:
-            return
+        price = self._require_price(
+            close_prices_arr, date_idx, ticker_idx, 'Close', ticker
+        )
             
         price_eff = self.slippage_model.apply(price, -qty)
         comm = self._calculate_commission(-qty, price_eff)
